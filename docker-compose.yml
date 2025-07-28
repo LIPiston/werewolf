@@ -1,0 +1,22 @@
+services:
+  frontend:
+    build:
+      context: ./werewolf-app
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://backend:8000
+    container_name: frontend
+    ports:
+      - "6500:3000"
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: ./werewolf-server
+      dockerfile: Dockerfile
+    container_name: backend
+    expose:
+      - "8000"
+    ports:
+      - "8000:8000"
