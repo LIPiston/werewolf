@@ -39,7 +39,7 @@
 
 - `werewolf-app/`：前端应用 (Next.js)
 - `werewolf-server/`：后端 API (Python FastAPI)
-- `werewolf/`：参考代码 (不可修改)
+- `werewolf/`：[参考代码](https://github.com/xiong35/werewolf)
 - `docker-compose.yml`：Docker Compose 配置文件
 - `bug.md`：项目当前状态、计划和已知 Bug 列表
 
