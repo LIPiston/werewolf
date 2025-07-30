@@ -20,19 +20,20 @@ interface PlayerAvatarProps {
   height?: number;
 }
 
-export default function PlayerAvatar({ profile, width = 64, height = 64 }: PlayerAvatarProps) {
+export default function PlayerAvatar({ profile, width = 72, height = 72 }: PlayerAvatarProps) {
   const avatarSrc = profile.avatar_url 
     ? `http://localhost:8000${profile.avatar_url}`
-    : '/user-regular-full.svg'; // Default to the local SVG
+    : '/user-regular-full.svg';
 
   return (
-    <div className="relative rounded-full overflow-hidden bg-gray-700 flex items-center justify-center" style={{ width, height }}>
+    <div className="relative rounded-full p-1 ring-2 ring-gray-600 bg-gray-800">
       <Image
         src={avatarSrc}
         alt={`${profile.name}'s avatar`}
         width={width}
         height={height}
-        className="object-cover"
+        className="object-cover rounded-full"
+        priority
       />
     </div>
   );

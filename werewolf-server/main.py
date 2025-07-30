@@ -76,6 +76,24 @@ async def upload_avatar(player_id: str, file: UploadFile = File(...)):
 async def get_game_templates():
     """Returns the list of available game templates."""
     return GAME_TEMPLATES
+@app.get("/games")
+async def get_games():
+    """Returns a list of all active, joinable games."""
+    active_games = game_manager.get_all_games()
+    
+    # We want to return a simplified list of rooms, not the full game state
+    room_list = []
+    for room_id, game in active_games.items():
+        if game.phase == "lobby":
+            host_profile = profile_manager.read_player_profile(game.host_id)
+            room_list.append({
+                "room_id": room_id,
+                "host_name": host_profile.name if host_profile else "Unknown Host",
+                "player_count": len(game.players),
+                "max_players": next((t.player_counts[0] for t in GAME_TEMPLATES if t.name == game.game_config.template_name), 12),
+                "template_name": game.game_config.template_name
+            })
+    return room_list
 
 class CreateGameRequest(BaseModel):
     host_profile_id: str
@@ -88,6 +106,7 @@ async def create_game(request: CreateGameRequest):
         # This is a health check, don't actually create a game
         return {"room_id": "test", "player_id": "test"}
 
+    print(f"Creating game with template: {request.game_config.template_name}") # 添加日志
     game = game_manager.create_game(request.host_profile_id, request.game_config)
     
     host_profile = profile_manager.read_player_profile(request.host_profile_id)
@@ -126,6 +145,7 @@ async def join_game(room_id: str, request: JoinGameRequest):
         avatar_url=profile.avatar_url,
         seat=None
     )
+    print(f"Player {new_player.name} ({new_player.id}) joined room {room_id}") # 添加日志
     game.players.append(new_player)
     
     await connection_manager.broadcast(room_id, {

@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { useProfile } from '@/lib/ProfileContext';
+import { WebSocketProvider, useWebSocket } from '@/lib/WebSocketContext';
 import { getGame } from '@/lib/api';
 import PlayerAvatar from '@/components/PlayerAvatar';
 import GameLog from '@/components/GameLog';
@@ -49,10 +50,11 @@ interface GameState {
 
 const MAX_PLAYERS = 12;
 
-export default function GamePage() {
+function GamePageContent() {
   const { roomId: rawRoomId } = useParams();
   const roomId = Array.isArray(rawRoomId) ? rawRoomId[0] : rawRoomId;
   const { profile: myProfile } = useProfile();
+  const { setLastMessage } = useWebSocket();
   
   const socketRef = useRef<WebSocket | null>(null);
   const [gameState, setGameState] = useState<GameState | null>(null);
@@ -68,7 +70,6 @@ export default function GamePage() {
     }
   }, []);
 
-  // Single, robust useEffect for all setup
   useEffect(() => {
     if (!roomId || !myProfile) return;
 
@@ -76,13 +77,11 @@ export default function GamePage() {
 
     const setup = async () => {
       try {
-        // 1. Fetch initial state via HTTP
         const initialState = await getGame(roomId);
         if (!isMounted) return;
         setGameState(initialState);
         setGameLog(["成功获取游戏状态。"]);
 
-        // 2. Establish WebSocket connection
         const ws = new WebSocket(`ws://localhost:8000/ws/${roomId}/${myProfile.id}`);
         socketRef.current = ws;
 
@@ -94,10 +93,11 @@ export default function GamePage() {
           if (isMounted) setGameLog(prev => [...prev, "与服务器断开连接。"]);
         };
 
-        ws.onmessage = (event) => {
+        ws.onmessage = (event: MessageEvent) => {
           if (!isMounted) return;
+          setLastMessage(event); // Update context with the new message
           const message = JSON.parse(event.data);
-          
+
           if (message.type.includes('UPDATE') || message.type.includes('START')) {
             setGameState(message.payload);
           } else if (message.type === 'PLAYER_JOINED') {
@@ -105,8 +105,13 @@ export default function GamePage() {
              setGameLog(prev => [...prev, `玩家 ${message.payload.name} 已加入。`]);
           } else if (message.type === 'ROLE_ASSIGNMENT') {
               setGameLog(prev => [...prev, `你的身份是: ${message.payload.role}`]);
-          } else {
-            setGameLog(prev => [...prev, message.payload.log || `收到消息: ${message.type}`])
+          } else if (message.type === 'PHASE_CHANGE') {
+            setGameState(prev => prev ? { ...prev, phase: message.payload.phase, day: message.payload.day } : null);
+            setGameLog(prev => [...prev, `进入阶段: ${message.payload.phase}`]);
+          } else if (message.payload?.log) {
+            setGameLog(prev => [...prev, message.payload.log]);
+          } else if (!message.type.endsWith('_PANEL')) { // Don't log panel messages
+            setGameLog(prev => [...prev, `收到消息: ${message.type}`]);
           }
         };
 
@@ -129,9 +134,8 @@ export default function GamePage() {
       isMounted = false;
       socketRef.current?.close();
     };
-  // This effect runs only once on mount, which is the correct pattern.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, myProfile?.id]);
+  }, [roomId, myProfile?.id, setLastMessage]);
 
   const me = gameState?.players.find(p => p.profile_id === myProfile?.id);
 
@@ -140,19 +144,21 @@ export default function GamePage() {
     const canTakeSeat = !player && me && me.seat === null;
 
     return (
-      <div key={seatIndex} className="w-24 h-24 border-2 border-green-500 rounded-lg flex items-center justify-center p-2">
+      <div key={seatIndex} className="w-20 h-24 bg-gray-800 rounded-lg shadow-lg flex flex-col items-center justify-center p-1 transition-all duration-300">
         {player ? (
-          <div className={`text-center ${!player.is_alive ? 'opacity-40' : ''}`}>
+          <div className={`text-center ${!player.is_alive ? 'opacity-40 grayscale' : ''}`}>
              <PlayerAvatar profile={{id: player.profile_id, name: player.name, avatar_url: player.avatar_url}} />
-             <p className="text-white text-xs mt-1 truncate">{player.name}</p>
+             <p className="text-white text-sm font-medium mt-2 truncate">{player.is_sheriff && '👑 '}{player.name}</p>
+             <p className="text-gray-400 text-xs">{player.seat}号位</p>
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center">
-            <span className="text-gray-600 text-sm">空位</span>
+          <div className="flex flex-col items-center justify-center text-center">
+            <span className="text-gray-500 text-lg font-semibold">{seatIndex}号</span>
+            <span className="text-gray-600 text-sm mt-1">空位</span>
             {canTakeSeat && (
               <button
                 onClick={() => handleAction('TAKE_SEAT', { seat_number: seatIndex })}
-                className="mt-2 px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs"
+                className="mt-2 px-3 py-1 bg-blue-600 text-white text-xs font-bold rounded-md hover:bg-blue-500 transition-colors"
               >
                 上位
               </button>
@@ -163,46 +169,63 @@ export default function GamePage() {
     );
   };
 
-  if (isLoading) return <div className="text-white text-center p-8">正在加载游戏...</div>;
-  if (error) return <div className="text-red-500 text-center p-8">{error}</div>;
-  if (!gameState || !myProfile) return <div className="text-white text-center p-8">无法加载游戏数据。</div>;
+  if (isLoading) return <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white"><div className="text-xl">正在加载游戏...</div></div>;
+  if (error) return <div className="flex items-center justify-center min-h-screen bg-gray-900 text-red-500"><div className="text-xl">{error}</div></div>;
+  if (!gameState || !myProfile) return <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white"><div className="text-xl">无法加载游戏数据。</div></div>;
 
-  const seatIndices = Array.from({ length: MAX_PLAYERS }, (_, i) => i);
+  const seatIndices = Array.from({ length: MAX_PLAYERS }, (_, i) => i + 1);
 
   return (
-    <div className="bg-black text-white h-screen flex flex-col p-4 font-mono">
-      <header className="w-full h-12 border-2 border-red-500 mb-4 flex items-center justify-between px-4">
-        <h1 className="text-xl font-bold">房间: {roomId}</h1>
-        <div className="text-xl">
-            <span>第 {gameState.day} 天</span> - <span>{gameState.phase.toUpperCase()}</span>
-        </div>
-         <div>
-            {gameState.nightly_deaths.length > 0 && `死亡: ${gameState.nightly_deaths.length}`}
-        </div>
-      </header>
+    <div className="bg-gray-900 text-white h-screen flex flex-col overflow-hidden">
+        <header className="bg-gray-800 shadow-md">
+            <div className="container mx-auto px-6 py-3 flex justify-between items-center">
+                <h1 className="text-xl font-bold text-white">房间: {roomId}</h1>
+                <div className="text-center">
+                    <span className="text-lg font-semibold text-yellow-400">第 {gameState.day} 天</span>
+                    <span className="mx-2 text-gray-500">|</span>
+                    <span className="text-lg font-semibold text-green-400">{gameState.phase.toUpperCase()}</span>
+                </div>
+                <div className="text-sm text-red-500">
+                    {gameState.nightly_deaths.length > 0 && `死亡: ${gameState.nightly_deaths.length}`}
+                </div>
+            </div>
+        </header>
 
-      <main className="flex-grow grid grid-cols-[1fr_4fr_1fr] grid-rows-1 gap-4">
-        <div className="flex flex-col justify-around items-center">
-          {seatIndices.slice(0, 6).map(renderPlayerSlot)}
-        </div>
-        <div className="border-2 border-white h-full overflow-y-auto p-4 flex flex-col-reverse">
-          <GameLog logs={gameLog} />
-        </div>
-        <div className="flex flex-col justify-around items-center">
-          {seatIndices.slice(6, 12).map(renderPlayerSlot)}
-        </div>
-      </main>
+        <main className="flex-grow container mx-auto p-4 grid grid-cols-12 gap-4">
+            <div className="col-span-3 grid grid-cols-2 gap-4 content-around">
+                {seatIndices.slice(0, 6).map(renderPlayerSlot)}
+            </div>
+            
+            <div className="col-span-6 bg-gray-800 rounded-lg p-4 flex flex-col">
+                <div className="flex-grow overflow-y-auto">
+                    <GameLog logs={gameLog} />
+                </div>
+            </div>
 
-      <footer className="mt-4 shrink-0 p-4 bg-gray-900 rounded-lg min-h-[100px] w-full max-w-4xl flex items-center justify-center">
-          {me && (
-            <ActionBar 
-              gameState={gameState}
-              myPlayer={me}
-              onAction={handleAction}
-              ws={socketRef.current}
-            />
-          )}
-      </footer>
+            <div className="col-span-3 grid grid-cols-2 gap-4 content-around">
+                {seatIndices.slice(6, 12).map(renderPlayerSlot)}
+            </div>
+        </main>
+
+        <footer className="container mx-auto p-4">
+            <div className="bg-gray-800 rounded-lg shadow-lg p-4 min-h-[120px] w-full flex items-center justify-center">
+                {me && (
+                    <ActionBar
+                      gameState={gameState}
+                      myPlayer={me}
+                      onAction={handleAction}
+                    />
+                )}
+            </div>
+        </footer>
     </div>
   );
+}
+
+export default function GamePage() {
+    return (
+        <WebSocketProvider>
+            <GamePageContent />
+        </WebSocketProvider>
+    );
 }

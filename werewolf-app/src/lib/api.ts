@@ -77,3 +77,8 @@ export async function joinGame(roomId: string, profileId: string) {
   }
   return response.json();
 }
+export async function getRooms() {
+  const response = await fetch(`${API_BASE_URL}/games`);
+  if (!response.ok) throw new Error("Failed to get rooms");
+  return response.json();
+}

@@ -1,7 +1,7 @@
 import asyncio
 import random
 from typing import Dict, Optional
-from models import Game, GameConfig, Player, Role, GAME_TEMPLATES
+from models import Game, GameConfig, Player, Role, GAME_TEMPLATES, WOLF_ROLES
 import importlib
 import models # Import the module itself
 import uuid
@@ -44,6 +44,10 @@ class GameManager:
     def get_game(self, room_id: str) -> Optional[Game]:
         """Retrieves a game by its room ID."""
         return self.games.get(room_id)
+
+    def get_all_games(self) -> Dict[str, Game]:
+        """Returns all active games."""
+        return self.games
 
     async def take_seat(self, room_id: str, player_id: str, seat_number: int):
         """Allows a player to take a seat."""
@@ -110,6 +114,7 @@ class GameManager:
 
         for player, role in zip(game.players, roles):
             player.role = role
+            print(f"Player {player.name} ({player.id}) is assigned role {role.value}") # 添加日志
 
         game.phase = "werewolf_turn"
         game.last_guarded_id = None # Initialize last_guarded_id at game start
@@ -126,6 +131,8 @@ class GameManager:
                 "payload": {"role": p.role.value if p.role else "No Role"}
             })
 
+        # --- Start the game by kicking off the main game loop ---
+        print(f"--- Room {room_id}: Kicking off game loop ---")
         await self.game_loop(room_id)
 
 
@@ -133,10 +140,20 @@ class GameManager:
         """Handles the werewolf turn."""
         print(f"--- Room {game.room_id}: Night {game.day} - Werewolf Turn ---")
         await self.broadcast_phase(game, "werewolf_turn", 30)
-        werewolves = [p for p in game.players if p.role == Role.WEREWOLF and p.is_alive]
+        
+        # Use WOLF_ROLES to correctly identify all wolf-type players
+        werewolves = [p for p in game.players if p.role in WOLF_ROLES and p.is_alive]
+        
+        if not werewolves:
+            print(f"No living werewolves in Room {game.room_id}. Skipping werewolf turn actions.")
+            return
+            
+        # Prepare the list of potential targets (all living players)
         living_players = [p.dict() for p in game.players if p.is_alive]
+        
+        # Send the panel to all werewolves
         for werewolf in werewolves:
-            print(f"Sending WEREWOLF_PANEL to {werewolf.name} ({werewolf.id})")
+            print(f"Sending WEREWOLF_PANEL to {werewolf.name} ({werewolf.id}), role: {werewolf.role.value}")
             await connection_manager.send_to_player(game.room_id, werewolf.id, {
                 "type": "WEREWOLF_PANEL",
                 "payload": {"players": living_players}
@@ -258,8 +275,19 @@ class GameManager:
         # Skip turns for dead or non-existent roles
         while True:
             role_for_phase = self.PHASE_TO_ROLE.get(next_phase)
-            if not role_for_phase or any(p.role == role_for_phase and p.is_alive for p in game.players):
+            
+            # If the phase is for werewolves, check against the WOLF_ROLES set
+            if next_phase == "werewolf_turn":
+                if any(p.role in WOLF_ROLES and p.is_alive for p in game.players):
+                    break
+            # For other roles, check if any player has that specific role
+            elif role_for_phase and any(p.role == role_for_phase and p.is_alive for p in game.players):
                 break
+            # If the phase has no specific role (e.g., voting), or if it's a werewolf turn with no wolves, proceed
+            elif not role_for_phase:
+                 break
+
+            print(f"Skipping phase {next_phase} as no eligible players are alive.")
             current_phase_index = self.PHASE_ORDER.index(next_phase)
             next_phase = self.PHASE_ORDER[(current_phase_index + 1) % len(self.PHASE_ORDER)]
             
@@ -313,10 +341,10 @@ class GameManager:
         if not game or game.phase == "ended":
             return
 
-        print(f"--- Room {game.room_id}: Entering phase {game.phase} ---")
+        print(f"--- Room {game.room_id}: Day {game.day} - Entering phase {game.phase} ---") # 添加日志
         handler = self.PHASE_HANDLERS.get(game.phase)
         if handler:
-            await handler(self, game)
+            await handler(game)
         else:
             print(f"Warning: No handler found for phase {game.phase}")
 

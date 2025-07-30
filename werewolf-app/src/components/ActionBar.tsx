@@ -1,6 +1,7 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { useWebSocket } from '@/lib/WebSocketContext';
 
 // --- Enums and Types (matching backend) ---
 enum Role {
@@ -65,60 +66,79 @@ interface ActionBarProps {
   gameState: GameState;
   myPlayer: GamePlayer;
   onAction: (action: string, payload?: object) => void;
-  ws: WebSocket | null;
 }
 
-const ActionBar: React.FC<ActionBarProps> = ({ gameState, myPlayer, onAction, ws }) => {
-  const [werewolfPanel, setWerewolfPanel] = React.useState<WerewolfPanelProps | null>(null);
-  const [witchPanel, setWitchPanel] = React.useState<WitchPanelProps | null>(null);
-  const [seerPanel, setSeerPanel] = React.useState<SeerPanelProps | null>(null);
-  const [guardPanel, setGuardPanel] = React.useState<GuardPanelProps | null>(null);
+const ActionButton = ({ onClick, children, className, disabled }: { onClick: () => void; children: React.ReactNode; className?: string; disabled?: boolean }) => (
+  <button
+    onClick={onClick}
+    disabled={disabled}
+    className={`px-4 py-2 text-sm font-medium text-white capitalize transition-colors duration-200 transform rounded-md focus:outline-none focus:ring focus:ring-opacity-80 ${className} ${disabled ? 'bg-gray-600 cursor-not-allowed' : 'hover:bg-opacity-80'}`}
+  >
+    {children}
+  </button>
+);
 
-  React.useEffect(() => {
-    if (ws) {
-      ws.addEventListener('message', (event) => {
-        const message = JSON.parse(event.data);
-        if (message.type === 'WEREWOLF_PANEL') {
-          setWerewolfPanel(message.payload);
-        } else if (message.type === 'WITCH_PANEL') {
-          setWitchPanel(message.payload);
-        } else if (message.type === 'SEER_PANEL') {
-          setSeerPanel(message.payload);
-        } else if (message.type === 'GUARD_PANEL') {
-          setGuardPanel(message.payload);
-        } else if (message.type === 'PHASE_CHANGE') {
-          // Reset panels on phase change
-          setWerewolfPanel(null);
-          setWitchPanel(null);
-          setSeerPanel(null);
-          setGuardPanel(null);
-        }
-      });
+const ActionPanel = ({ title, children, onConfirm }: { title: string; children: React.ReactNode; onConfirm?: () => void }) => (
+    <div className="w-full text-center">
+        <h3 className="text-lg font-semibold text-white mb-4">{title}</h3>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+            {children}
+        </div>
+        {onConfirm && (
+            <div className="mt-4">
+                <ActionButton onClick={onConfirm} className="bg-green-600">
+                    确认
+                </ActionButton>
+            </div>
+        )}
+    </div>
+);
+
+const ActionBar: React.FC<ActionBarProps> = ({ gameState, myPlayer, onAction }) => {
+  const { lastMessage } = useWebSocket();
+  const [werewolfPanel, setWerewolfPanel] = useState<WerewolfPanelProps | null>(null);
+  const [witchPanel, setWitchPanel] = useState<WitchPanelProps | null>(null);
+  const [seerPanel, setSeerPanel] = useState<SeerPanelProps | null>(null);
+  const [guardPanel, setGuardPanel] = useState<GuardPanelProps | null>(null);
+
+  useEffect(() => {
+    if (!lastMessage) return;
+
+    const message = JSON.parse(lastMessage.data);
+
+    switch (message.type) {
+      case 'WEREWOLF_PANEL':
+        setWerewolfPanel(message.payload);
+        break;
+      case 'WITCH_PANEL':
+        setWitchPanel(message.payload);
+        break;
+      case 'SEER_PANEL':
+        setSeerPanel(message.payload);
+        break;
+      case 'GUARD_PANEL':
+        setGuardPanel(message.payload);
+        break;
+      case 'PHASE_CHANGE':
+        // Reset all panels on phase change
+        setWerewolfPanel(null);
+        setWitchPanel(null);
+        setSeerPanel(null);
+        setGuardPanel(null);
+        break;
     }
-  }, [ws]);
+  }, [lastMessage]);
 
 
   if (!myPlayer.is_alive) {
-    return <div className="text-center text-red-500">你已经出局了</div>;
+    return <div className="text-center text-xl font-semibold text-red-500">你已经出局了</div>;
   }
 
-  const renderConfirmButton = () => (
-    <div className="absolute bottom-4 right-4">
-      <button
-        onClick={() => onAction('CONFIRM_ACTION')}
-        className="bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-4 rounded-lg"
-      >
-        确认
-      </button>
-    </div>
-  );
-
-  // Host action to start the game
   if (gameState.phase === 'lobby' && gameState.host_id === myPlayer.profile_id) {
     return (
         <button
           onClick={() => onAction('START_GAME')}
-          className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-6 rounded-lg text-xl"
+          className="px-8 py-3 text-lg font-bold text-white capitalize transition-colors duration-300 transform bg-blue-600 rounded-md hover:bg-blue-500 focus:outline-none focus:ring focus:ring-blue-300 focus:ring-opacity-80"
         >
           开始游戏
         </button>
@@ -127,102 +147,78 @@ const ActionBar: React.FC<ActionBarProps> = ({ gameState, myPlayer, onAction, ws
 
   if (werewolfPanel) {
     return (
-      <div className="relative w-full">
-        <h3 className="text-lg text-white">选择一个目标:</h3>
+      <ActionPanel title="狼人请选择目标" onConfirm={() => onAction('CONFIRM_ACTION')}>
         {werewolfPanel.players.map(player => (
-          <button
-            key={player.id}
-            onClick={() => onAction('WEREWOLF_VOTE', { target_player_id: player.id })}
-            className="bg-red-800 hover:bg-red-700 text-white font-bold py-2 px-4 rounded m-1"
-          >
+          <ActionButton key={player.id} onClick={() => onAction('WEREWOLF_VOTE', { target_player_id: player.id })} className="bg-red-800">
             {player.name}
-          </button>
+          </ActionButton>
         ))}
-        {renderConfirmButton()}
-      </div>
+      </ActionPanel>
     );
   }
 
   if (witchPanel) {
     return (
-      <div className="relative w-full">
-        <h3 className="text-lg text-white">女巫行动:</h3>
-        <p className="text-yellow-300 mb-2">狼人目标: {witchPanel.werewolf_target || '无人'}</p>
+      <ActionPanel title="女巫请行动" onConfirm={() => onAction('CONFIRM_ACTION')}>
+        <p className="w-full text-yellow-300 mb-2">狼人目标: {witchPanel.werewolf_target || '无人'}</p>
         {witchPanel.has_save && (
-          <button onClick={() => onAction('WITCH_ACTION', { action: 'save' })} className="bg-green-600 px-4 py-2 rounded mr-2">使用解药</button>
+          <ActionButton onClick={() => onAction('WITCH_ACTION', { action: 'save' })} className="bg-green-600">使用解药</ActionButton>
         )}
         {witchPanel.has_poison && witchPanel.players.map(player => (
-          <button
-            key={player.id}
-            onClick={() => onAction('WITCH_ACTION', { action: 'poison', target_player_id: player.id })}
-            className="bg-purple-800 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded m-1"
-          >
+          <ActionButton key={player.id} onClick={() => onAction('WITCH_ACTION', { action: 'poison', target_player_id: player.id })} className="bg-purple-800">
             毒杀 {player.name}
-          </button>
+          </ActionButton>
         ))}
-        {renderConfirmButton()}
-      </div>
+      </ActionPanel>
     );
   }
   
   if (seerPanel) {
       return (
-          <div className="relative w-full">
-              <h3 className="text-lg text-white">预言家查验:</h3>
+          <ActionPanel title="预言家请查验" onConfirm={() => onAction('CONFIRM_ACTION')}>
               {seerPanel.players.map(player => (
-                  <button
-                      key={player.id}
-                      onClick={() => onAction('SEER_CHECK', { target_player_id: player.id })}
-                      className="bg-blue-800 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded m-1"
-                    >
+                  <ActionButton key={player.id} onClick={() => onAction('SEER_CHECK', { target_player_id: player.id })} className="bg-blue-800">
                       查验 {player.name}
-                  </button>
+                  </ActionButton>
               ))}
-              {renderConfirmButton()}
-          </div>
+          </ActionPanel>
       );
   }
 
   if (guardPanel) {
       return (
-          <div className="relative w-full">
-              <h3 className="text-lg text-white">守卫守护:</h3>
+          <ActionPanel title="守卫请守护" onConfirm={() => onAction('CONFIRM_ACTION')}>
               {guardPanel.players.map(player => (
-                  <button
+                  <ActionButton
                       key={player.id}
                       onClick={() => onAction('GUARD_ACTION', { target_player_id: player.id })}
                       disabled={player.id === guardPanel.last_guarded_id}
-                      className={`font-bold py-2 px-4 rounded m-1 ${player.id === guardPanel.last_guarded_id ? 'bg-gray-600' : 'bg-yellow-700 hover:bg-yellow-600'} text-white`}
+                      className="bg-yellow-700"
                   >
                       守护 {player.name}
-                  </button>
+                  </ActionButton>
               ))}
-              {renderConfirmButton()}
-          </div>
+          </ActionPanel>
       );
   }
   
   if (gameState.phase === 'voting') {
     return (
-      <div className="relative w-full">
-        <h3 className="text-lg text-white">投票放逐:</h3>
-        {gameState.players.map(player => {
-            if (!player.is_alive) return null;
-            return (
-                <button
-                  key={player.id}
-                  onClick={() => onAction('VOTE_PLAYER', { target_player_id: player.id })}
-                  className="bg-red-800 hover:bg-red-700 text-white font-bold py-2 px-4 rounded m-1"
-                >
-                  {player.name}
-                </button>
-            );
-        })}
-      </div>
+      <ActionPanel title="投票放逐">
+        {gameState.players.filter(p => p.is_alive).map(player => (
+            <ActionButton
+              key={player.id}
+              onClick={() => onAction('VOTE_PLAYER', { target_player_id: player.id })}
+              className="bg-red-800"
+            >
+              {player.name}
+            </ActionButton>
+        ))}
+      </ActionPanel>
     );
   }
 
-  return <div className="text-white">等待下一阶段... ({gameState.phase})</div>;
+  return <div className="text-white text-lg">等待下一阶段... ({gameState.phase})</div>;
 };
 
 export default ActionBar;

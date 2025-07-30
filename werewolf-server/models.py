@@ -1,5 +1,5 @@
 from enum import Enum
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_serializer
 from typing import List, Dict, Literal, Optional, Any
 
 # --- Game-related Enums and Models ---
@@ -21,6 +21,18 @@ class Role(str, Enum):
     GARGOYLE = "石像鬼"
     EVIL_KNIGHT = "恶灵骑士"
     HIDDEN_WOLF = "隐狼"
+
+
+WOLF_ROLES = {
+    Role.WEREWOLF,
+    Role.WOLF_KING,
+    Role.WHITE_WOLF_KING,
+    Role.WOLF_BEAUTY,
+    Role.SNOW_WOLF,
+    Role.HIDDEN_WOLF,
+    Role.GARGOYLE
+}
+
 
 class GameTemplate(BaseModel):
     """Represents a game setup template (板子)."""
@@ -60,6 +72,10 @@ class Player(BaseModel):
     avatar_url: Optional[str] = None
     is_alive: bool = True
     role: Optional[Role] = None
+
+    @field_serializer('role')
+    def serialize_role(self, role: Role, _info):
+        return role.value if role else None
     is_sheriff: bool = False
     seat: Optional[int] = Field(default=None, ge=0, lt=12)
 

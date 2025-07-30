@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useProfile } from '@/lib/ProfileContext';
 import { uploadAvatar, updateProfileName } from '@/lib/api';
 import { useRouter } from 'next/navigation';
-import Image from 'next/image';
 import Link from 'next/link';
 import PlayerAvatar from '@/components/PlayerAvatar';
 
@@ -39,7 +38,7 @@ export default function ProfilePage() {
     try {
       const result = await uploadAvatar(profile.id, formData);
       setProfile({ ...profile, avatar_url: result.avatar_url });
-    } catch (uploadError) {
+    } catch {
       setError('Upload failed. Please ensure the file is an image and under 8MB.');
     } finally {
       setIsUploading(false);
@@ -59,7 +58,7 @@ export default function ProfilePage() {
       const updatedProfile = await updateProfileName(profile.id, newName);
       setProfile(updatedProfile);
       setIsEditingName(false);
-    } catch (err) {
+    } catch {
       setError("Failed to update name.");
     }
   };

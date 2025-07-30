@@ -4,17 +4,19 @@ WORKDIR /app
 
 COPY package.json ./
 
-RUN npm install
+RUN yarn config set registry https://registry.npmmirror.com/ && \
+    yarn install --verbose
+
 
 COPY . .
 
 ARG NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 
-RUN npm run build
+RUN yarn build
 
 EXPOSE 3000
 
 # Health check removed for simplicity. User may need to manually restart frontend container.
 
-CMD ["npm", "start"]
+CMD ["yarn", "start"]

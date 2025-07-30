@@ -141,7 +141,5 @@ async def handle_werewolf_vote(game: Game, player: Player, payload: Dict):
     # Check if all werewolves have voted
     werewolves = [p for p in game.players if p.role == Role.WEREWOLF and p.is_alive]
     if len(game.werewolf_votes) == len(werewolves):
-        # process_werewolf_votes(game)
-        # Potentially trigger the next phase of the night (e.g., witch's turn)
-        # For now, we'll just log it
-        print(f"Werewolves have decided to kill: {game.werewolf_kill_target}")
+        # All werewolves have voted, advance to the next phase
+        await game_manager.advance_game_phase(game)

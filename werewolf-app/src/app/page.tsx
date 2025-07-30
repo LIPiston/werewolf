@@ -1,62 +1,81 @@
 'use client';
 
-import { useState } from 'react';
 import { useProfile } from '@/lib/ProfileContext';
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 import { createProfile } from '@/lib/api';
-import Link from 'next/link';
 
 export default function Home() {
-  const { profile, setProfile, isLoading } = useProfile();
+  const { profile, setProfile } = useProfile();
+  const router = useRouter();
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const handleCreateProfile = async (e: React.FormEvent) => {
+  const handleJoin = () => {
+    router.push('/join-room');
+  };
+
+  const handleCreate = () => {
+    router.push('/create-room');
+  };
+
+  const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
     if (!name.trim()) {
-      setError("Name cannot be empty.");
+      setError("请输入你的名字。");
       return;
     }
+    setError(null);
     try {
       const newProfile = await createProfile(name);
       setProfile(newProfile);
-    } catch (err) {
+    } catch {
+      setError("创建个人资料失败。");
     }
   };
 
-  if (isLoading) {
-    return <div className="text-center text-white">Loading...</div>;
-  }
-
-  if (!profile) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen">
-        <h1 className="text-4xl font-bold text-white mb-4">创建你的角色</h1>
-        <form onSubmit={handleCreateProfile} className="flex flex-col space-y-4 w-full max-w-sm">
-          <input
-            type="text"
-            placeholder="输入你的昵称"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="p-3 rounded-lg bg-gray-700 text-white border border-gray-600"
-          />
-          <button type="submit" className="px-6 py-3 bg-green-600 text-white rounded-lg">
-            创建
-          </button>
-          {error && <p className="text-red-500">{error}</p>}
-        </form>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen text-white">
-      <h1 className="text-5xl font-bold mb-4">欢迎, {profile.name}!</h1>
-      <div className="flex space-x-4">
-        <Link href="/create-room" className="px-6 py-3 bg-blue-600 rounded-lg">创建房间</Link>
-        <Link href="/join-room" className="px-6 py-3 bg-green-600 rounded-lg">加入房间</Link>
-        <Link href="/profile" className="px-6 py-3 bg-gray-600 rounded-lg">个人资料</Link>
-      </div>
+    <div className="bg-gray-900 text-white min-h-screen">
+      <header className="bg-gray-900 shadow">
+        <div className="container mx-auto px-6 py-4 flex justify-between items-center">
+          <a href="#" className="text-2xl font-bold text-white lg:text-3xl hover:text-gray-300">狼人杀</a>
+          {profile && (
+            <div className="flex items-center">
+              <span className="text-white">欢迎, {profile.name}</span>
+            </div>
+          )}
+        </div>
+      </header>
+      
+      <main className="container mx-auto px-6 py-16 text-center">
+        <div className="mx-auto max-w-lg">
+            <h1 className="text-3xl font-bold text-white lg:text-5xl">终极谎言与欺骗游戏</h1>
+            <p className="mt-6 text-gray-300">召集你的朋友，揭露狼人，或者在为时已晚之前欺骗村民。</p>
+            
+            {profile ? (
+              <div className="mt-10 flex justify-center space-x-4">
+                <button onClick={handleCreate} className="w-full transform rounded-md bg-blue-600 px-8 py-2.5 text-sm font-medium capitalize tracking-wide text-white transition-colors duration-300 hover:bg-blue-500 focus:outline-none focus:ring focus:ring-blue-300 focus:ring-opacity-80 sm:w-auto">创建房间</button>
+                <button onClick={handleJoin} className="w-full transform rounded-md border border-transparent bg-gray-700 px-8 py-2.5 text-sm font-medium capitalize tracking-wide text-white transition-colors duration-300 hover:bg-gray-600 focus:outline-none focus:ring focus:ring-gray-300 focus:ring-opacity-80 sm:w-auto">加入房间</button>
+              </div>
+            ) : (
+              <form onSubmit={handleProfileSubmit} className="mt-8">
+                <div className="flex flex-col space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4">
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="输入你的名字"
+                    className="w-full rounded-md border bg-gray-800 px-4 py-2 text-white placeholder-gray-400 focus:border-blue-400 focus:outline-none focus:ring focus:ring-blue-300 focus:ring-opacity-40"
+                  />
+                  <button type="submit" className="w-full transform rounded-md bg-blue-600 px-8 py-2.5 text-sm font-medium capitalize tracking-wide text-white transition-colors duration-300 hover:bg-blue-500 focus:outline-none focus:ring focus:ring-blue-300 focus:ring-opacity-80 sm:w-auto">
+                    设置名字并开始
+                  </button>
+                </div>
+                {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
+              </form>
+            )}
+        </div>
+      </main>
     </div>
   );
 }

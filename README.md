@@ -8,7 +8,7 @@
 
 ### 技术栈
 
-- **前端：** Next.js + Tailwind CSS
+- **前端：** Next.js + Tailwind CSS + merakiui
 - **后端：** Python FastAPI
 - **数据库：** SQLite
 - **通信：** HTTP / WebSocket
