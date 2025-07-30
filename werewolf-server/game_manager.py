@@ -1,5 +1,9 @@
+import asyncio
+import random
 from typing import Dict, Optional
-from models import Game, GameConfig, Player
+from models import Game, GameConfig, Player, Role, GAME_TEMPLATES
+import importlib
+import models # Import the module itself
 import uuid
 from connections import connection_manager
 import profile_manager
@@ -14,7 +18,21 @@ class GameManager:
         if cls._instance is None:
             cls._instance = super(GameManager, cls).__new__(cls)
             cls.games = {}
+            # Force reload the models module to ensure latest Pydantic schema is used
+            importlib.reload(models)
         return cls._instance
+
+    def __init__(self):
+        self.PHASE_HANDLERS = {
+            "werewolf_turn": self.handle_werewolf_turn,
+            "witch_turn": self.handle_witch_turn,
+            "seer_turn": self.handle_seer_turn,
+            "guard_turn": self.handle_guard_turn,
+            "sheriff_election": self.handle_sheriff_election,
+            "day_discussion": self.handle_day_discussion,
+            "voting": self.handle_voting_phase,
+            "vote_result": self.handle_vote_result_phase,
+        }
 
     def create_game(self, host_id: str, game_config: GameConfig) -> Game:
         """Creates a new game room and returns it."""
@@ -27,105 +45,286 @@ class GameManager:
         """Retrieves a game by its room ID."""
         return self.games.get(room_id)
 
+    async def take_seat(self, room_id: str, player_id: str, seat_number: int):
+        """Allows a player to take a seat."""
+        game = self.get_game(room_id)
+        if not game or game.phase != "lobby":
+            return
+
+        player = next((p for p in game.players if p.id == player_id), None)
+        if not player:
+            return
+
+        # Check if seat is already taken
+        if any(p.seat == seat_number for p in game.players):
+            # Handle seat taken error (e.g., send a message back to the player)
+            return
+
+        player.seat = seat_number
+
+        await connection_manager.broadcast(room_id, {
+            "type": "GAME_STATE_UPDATE",
+            "payload": game.dict()
+        })
+
+    async def start_game(self, room_id: str):
+        """Assigns roles and starts the game."""
+        game = self.get_game(room_id)
+        if not game or game.phase != "lobby":
+            return
+
+        template = next((t for t in GAME_TEMPLATES if t.name == game.game_config.template_name), None)
+        if not template:
+            # Handle template not found
+            print(f"Error: Game template '{game.game_config.template_name}' not found.")
+            return
+
+        if len(game.players) not in template.player_counts:
+            # Handle incorrect player count
+            print(f"Error: Player count {len(game.players)} not supported for template '{template.name}'.")
+            return
+
+        # --- Auto-seat unseated players ---
+        seated_players = {p.seat for p in game.players if p.seat is not None}
+        unseated_players = [p for p in game.players if p.seat is None]
+        
+        available_seats = [i for i in range(len(game.players)) if i not in seated_players]
+        random.shuffle(available_seats)
+
+        for player in unseated_players:
+            if not available_seats:
+                # This should not happen if player count is correct
+                print(f"Error: Not enough seats for all players.")
+                return
+            player.seat = available_seats.pop(0)
+        
+        # Sort players by seat number before assigning roles
+        game.players.sort(key=lambda p: p.seat)
+        
+        # --- Role Assignment ---
+        roles = []
+        for role, count in template.roles.items():
+            roles.extend([role] * count)
+
+        random.shuffle(roles)
+
+        for player, role in zip(game.players, roles):
+            player.role = role
+
+        game.phase = "werewolf_turn"
+        game.last_guarded_id = None # Initialize last_guarded_id at game start
+
+        # Broadcast game start and individual roles
+        await connection_manager.broadcast(room_id, {
+            "type": "GAME_START",
+            "payload": game.dict(exclude={'game_config', 'host_id'})
+        })
+
+        for p in game.players:
+            await connection_manager.send_to_player(room_id, p.id, {
+                "type": "ROLE_ASSIGNMENT",
+                "payload": {"role": p.role.value if p.role else "No Role"}
+            })
+
+        await self.game_loop(room_id)
+
+
+    async def handle_werewolf_turn(self, game: Game):
+        """Handles the werewolf turn."""
+        print(f"--- Room {game.room_id}: Night {game.day} - Werewolf Turn ---")
+        await self.broadcast_phase(game, "werewolf_turn", 30)
+        werewolves = [p for p in game.players if p.role == Role.WEREWOLF and p.is_alive]
+        living_players = [p.dict() for p in game.players if p.is_alive]
+        for werewolf in werewolves:
+            print(f"Sending WEREWOLF_PANEL to {werewolf.name} ({werewolf.id})")
+            await connection_manager.send_to_player(game.room_id, werewolf.id, {
+                "type": "WEREWOLF_PANEL",
+                "payload": {"players": living_players}
+            })
+
+    async def handle_witch_turn(self, game: Game):
+        """Handles the witch's turn."""
+        print(f"--- Room {game.room_id}: Night {game.day} - Witch Turn ---")
+        await self.broadcast_phase(game, "witch_turn", 30)
+        witch = next((p for p in game.players if p.role == Role.WITCH and p.is_alive), None)
+        if witch:
+            print(f"Sending WITCH_PANEL to {witch.name} ({witch.id}). Werewolf target: {game.werewolf_kill_target}")
+            await connection_manager.send_to_player(game.room_id, witch.id, {
+                "type": "WITCH_PANEL",
+                "payload": {
+                    "werewolf_target": game.werewolf_kill_target,
+                    "has_save": game.witch_has_save,
+                    "has_poison": game.witch_has_poison,
+                    "players": [p.dict() for p in game.players if p.is_alive and p.id != witch.id]
+                }
+            })
+        else:
+            print(f"No living witch in Room {game.room_id}. Skipping witch turn.")
+
+    async def handle_seer_turn(self, game: Game):
+        """Handles the seer's turn."""
+        print(f"--- Room {game.room_id}: Night {game.day} - Seer Turn ---")
+        await self.broadcast_phase(game, "seer_turn", 30)
+        seer = next((p for p in game.players if p.role == Role.SEER and p.is_alive), None)
+        if seer:
+            print(f"Sending SEER_PANEL to {seer.name} ({seer.id})")
+            await connection_manager.send_to_player(game.room_id, seer.id, {
+                "type": "SEER_PANEL",
+                "payload": {"players": [p.dict() for p in game.players if p.is_alive and p.id != seer.id]}
+            })
+        else:
+            print(f"No living seer in Room {game.room_id}. Skipping seer turn.")
+
+    async def handle_guard_turn(self, game: Game):
+        """Handles the guard's turn."""
+        print(f"--- Room {game.room_id}: Night {game.day} - Guard Turn ---")
+        await self.broadcast_phase(game, "guard_turn", 30)
+        guard = next((p for p in game.players if p.role == Role.GUARD and p.is_alive), None)
+        if guard:
+            print(f"Sending GUARD_PANEL to {guard.name} ({guard.id}). Last guarded: {game.last_guarded_id}")
+            await connection_manager.send_to_player(game.room_id, guard.id, {
+                "type": "GUARD_PANEL",
+                "payload": {
+                    "players": [p.dict() for p in game.players if p.is_alive],
+                    "last_guarded_id": game.last_guarded_id
+                }
+            })
+        else:
+            print(f"No living guard in Room {game.room_id}. Skipping guard turn.")
+
+    async def handle_day_phase(self, game: Game):
+        """Handles the day phase."""
+        self.process_night_results(game)
+        game.day += 1
+        await connection_manager.broadcast(game.room_id, {
+            "type": "PHASE_CHANGE",
+            "payload": {
+                "phase": "day",
+                "day": game.day,
+                "deaths": game.nightly_deaths
+            }
+        })
+        game.nightly_deaths = []
+        game.werewolf_votes = {}
+        game.werewolf_kill_target = None
+        game.witch_used_potion_tonight = False
+        await self.broadcast_phase(game, "day", 30)
+        
+    async def handle_voting_phase(self, game: Game):
+        """Handles the voting phase."""
+        await self.broadcast_phase(game, "voting", 30)
+
+    async def handle_vote_result_phase(self, game: Game):
+        exiled_player_id = process_day_votes(game)
+        if exiled_player_id:
+            exiled_player = next((p for p in game.players if p.id == exiled_player_id), None)
+            if exiled_player:
+                exiled_player.is_alive = False
+
+        await connection_manager.broadcast(game.room_id, {
+            "type": "VOTE_RESULT",
+            "payload": {"exiled_player_id": exiled_player_id}
+        })
+        game.day_votes = {}
+        await self.advance_game_phase(game)
+
+
+    async def broadcast_phase(self, game: Game, phase: str, duration: int):
+        """Broadcasts the phase change and starts a timer."""
+        game.phase = phase
+        await connection_manager.broadcast(game.room_id, {
+            "type": "PHASE_CHANGE",
+            "payload": {"phase": phase, "duration": duration}
+        })
+        asyncio.create_task(self.phase_timer(game.room_id, phase, duration))
+
+    async def phase_timer(self, room_id: str, expected_phase: str, duration: int):
+        """Timer for a game phase. Advances the game if the phase hasn't changed."""
+        await asyncio.sleep(duration)
+        game = self.get_game(room_id)
+        if game and game.phase == expected_phase:
+            await self.advance_game_phase(game)
+
+    async def advance_game_phase(self, game: Game):
+        """Advances the game to the next phase."""
+        if self.check_game_over(game):
+            game.phase = "ended"
+            await connection_manager.broadcast(game.room_id, {"type": "GAME_OVER", "payload": {"winner": game.winner}})
+            return
+
+        current_phase_index = self.PHASE_ORDER.index(game.phase)
+        next_phase = self.PHASE_ORDER[(current_phase_index + 1) % len(self.PHASE_ORDER)]
+        
+        # Skip turns for dead or non-existent roles
+        while True:
+            role_for_phase = self.PHASE_TO_ROLE.get(next_phase)
+            if not role_for_phase or any(p.role == role_for_phase and p.is_alive for p in game.players):
+                break
+            current_phase_index = self.PHASE_ORDER.index(next_phase)
+            next_phase = self.PHASE_ORDER[(current_phase_index + 1) % len(self.PHASE_ORDER)]
+            
+        game.phase = next_phase
+        await self.game_loop(game.room_id)
+
+    PHASE_ORDER = [
+        "werewolf_turn", "witch_turn", "seer_turn", "guard_turn",
+        "sheriff_election", "day_discussion", "voting", "vote_result"
+    ]
+    
+    PHASE_TO_ROLE = {
+        "werewolf_turn": Role.WEREWOLF,
+        "witch_turn": Role.WITCH,
+        "seer_turn": Role.SEER,
+        "guard_turn": Role.GUARD,
+    }
+
+
+    async def handle_sheriff_election(self, game: Game):
+        print(f"--- Room {game.room_id}: Day {game.day} - Sheriff Election ---")
+        await self.broadcast_phase(game, "sheriff_election", 45) # 45 seconds for election process
+        # This phase will involve player actions (declare candidacy, vote)
+        # For now, just a placeholder, actual logic to be implemented on action
+        
+    async def handle_day_discussion(self, game: Game):
+        print(f"--- Room {game.room_id}: Day {game.day} - Day Discussion ---")
+        # Announce nightly deaths first
+        if game.nightly_deaths:
+            deaths_names = [p.name for p in game.players if p.id in game.nightly_deaths]
+            await connection_manager.broadcast(game.room_id, {
+                "type": "NIGHT_DEATHS",
+                "payload": {"deaths": deaths_names}
+            })
+            # Handle last words (遗言) - this would be a client-side prompt
+        else:
+            await connection_manager.broadcast(game.room_id, {
+                "type": "NIGHT_DEATHS",
+                "payload": {"deaths": []}
+            })
+        game.nightly_deaths = [] # Reset for next night
+        game.werewolf_votes = {}
+        game.werewolf_kill_target = None
+        game.witch_used_potion_tonight = False
+        
+        await self.broadcast_phase(game, "day_discussion", 45 * len([p for p in game.players if p.is_alive])) # 45 seconds per living player for discussion
+
     async def game_loop(self, room_id: str):
         """The main game loop that advances the game state."""
         game = self.get_game(room_id)
         if not game or game.phase == "ended":
             return
 
-        # Night phase transitions
-        if game.phase == "werewolf_turn":
-            # After werewolves vote, move to witch's turn
-            game.phase = "witch_turn"
-            await connection_manager.broadcast(room_id, {
-                "type": "PHASE_CHANGE",
-                "payload": {"phase": "witch_turn"}
-            })
-            # Notify the witch about the werewolf target
-            witch = next((p for p in game.players if p.role == "witch"), None)
-            if witch and witch.is_alive:
-                await connection_manager.send_to_player(room_id, witch.id, {
-                    "type": "WITCH_INFO",
-                    "payload": {"werewolf_target": game.werewolf_kill_target}
-                })
-            # Wait for witch to act
-            await asyncio.sleep(15) # 15 seconds for the witch to act
-            await self.game_loop(room_id) # Continue the loop
-
-        elif game.phase == "witch_turn":
-            # After witch's turn, move to seer's turn (or day)
-            game.phase = "seer_turn"
-            await connection_manager.broadcast(room_id, {
-                "type": "PHASE_CHANGE",
-                "payload": {"phase": "seer_turn"}
-            })
-            # Wait for seer to act
-            await asyncio.sleep(15) # 15 seconds for the seer to act
-            await self.game_loop(room_id) # Continue the loop
-
-        elif game.phase == "seer_turn":
-            # After seer's turn, process night results and move to day
-            self.process_night_results(game)
-            game.phase = "day"
-            game.day += 1
-            await connection_manager.broadcast(room_id, {
-                "type": "PHASE_CHANGE",
-                "payload": {
-                    "phase": "day", 
-                    "day": game.day,
-                    "deaths": game.nightly_deaths
-                }
-            })
-            game.nightly_deaths = [] # Reset for next night
-            game.werewolf_votes = {}
-            game.werewolf_kill_target = None
-            game.witch_used_potion_tonight = False
-            # Wait for day discussion
-            await asyncio.sleep(30) # 30 seconds for discussion
-            await self.game_loop(room_id) # Continue the loop
-
-        elif game.phase == "day":
-            # After discussion, move to voting
-            game.phase = "voting"
-            await connection_manager.broadcast(room_id, {
-                "type": "PHASE_CHANGE",
-                "payload": {"phase": "voting"}
-            })
-            # Wait for voting
-            await asyncio.sleep(20) # 20 seconds for voting
-            await self.game_loop(room_id) # Continue the loop
-
-        elif game.phase == "voting":
-            # After voting, process results and move to night
-            exiled_player_id = process_day_votes(game)
-            if exiled_player_id:
-                exiled_player = next((p for p in game.players if p.id == exiled_player_id), None)
-                if exiled_player:
-                    exiled_player.is_alive = False
-
-            await connection_manager.broadcast(room_id, {
-                "type": "VOTE_RESULT",
-                "payload": {"exiled_player_id": exiled_player_id}
-            })
-
-            # Check for game over
-            if self.check_game_over(game):
-                game.phase = "ended"
-                # Broadcast game over message
-            else:
-                game.phase = "werewolf_turn"
-                await connection_manager.broadcast(room_id, {
-                    "type": "PHASE_CHANGE",
-                    "payload": {"phase": "werewolf_turn"}
-                })
-            game.day_votes = {}
-            await self.game_loop(room_id) # Continue the loop
+        print(f"--- Room {game.room_id}: Entering phase {game.phase} ---")
+        handler = self.PHASE_HANDLERS.get(game.phase)
+        if handler:
+            await handler(self, game)
+        else:
+            print(f"Warning: No handler found for phase {game.phase}")
 
     def check_game_over(self, game: Game) -> bool:
         """Checks if the game is over and updates player stats."""
         living_players = [p for p in game.players if p.is_alive]
-        werewolves = [p for p in living_players if p.role == "werewolf"]
-        villagers = [p for p in living_players if p.role != "werewolf"]
+        werewolves = [p for p in living_players if p.role == Role.WEREWOLF]
+        villagers = [p for p in living_players if p.role != Role.WEREWOLF]
 
         winner = None
         if not werewolves:
@@ -148,17 +347,17 @@ class GameManager:
 
             profile['stats']['games_played'] += 1
 
-            is_winner = (winner == "good" and player.role != "werewolf") or \
-                        (winner == "bad" and player.role == "werewolf")
+            is_winner = (winner == "good" and player.role != Role.WEREWOLF) or \
+                        (winner == "bad" and player.role == Role.WEREWOLF)
 
             if is_winner:
                 profile['stats']['wins'] += 1
             else:
                 profile['stats']['losses'] += 1
 
-            if player.role == 'werewolf':
+            if player.role == Role.WEREWOLF:
                 profile['stats']['roles']['werewolf'] += 1
-            elif player.role in ['seer', 'witch', 'hunter']:
+            elif player.role in [Role.SEER, Role.WITCH, Role.HUNTER, Role.GUARD]:
                 profile['stats']['roles']['god'] += 1
             else:
                 profile['stats']['roles']['villager'] += 1

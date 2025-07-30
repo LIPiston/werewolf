@@ -1,143 +1,207 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { useProfile } from '@/lib/ProfileContext';
-import { getProfile } from '@/lib/api';
+import { getGame } from '@/lib/api';
 import PlayerAvatar from '@/components/PlayerAvatar';
 import GameLog from '@/components/GameLog';
 import ActionBar from '@/components/ActionBar';
 
-// Define more specific types as the project grows
+// --- Enums and Types (matching backend) ---
+enum Role {
+    WEREWOLF = "狼人",
+    VILLAGER = "平民",
+    SEER = "预言家",
+    WITCH = "女巫",
+    HUNTER = "猎人",
+    GUARD = "守卫",
+    IDIOT = "白痴",
+    WOLF_KING = "狼王",
+    KNIGHT = "骑士",
+    WHITE_WOLF_KING = "白狼王",
+    WOLF_BEAUTY = "狼美人",
+    SNOW_WOLF = "雪狼",
+    GARGOYLE = "石像鬼",
+    EVIL_KNIGHT = "恶灵骑士",
+    HIDDEN_WOLF = "隐狼",
+}
+
 interface GamePlayer {
-  id: string; // In-game ID
+  id: string;
   profile_id: string;
+  name: string;
+  avatar_url: string | null;
   is_alive: boolean;
-  role?: string;
+  role: Role | null;
+  is_sheriff: boolean;
+  seat: number | null;
 }
 
 interface GameState {
   room_id: string;
   players: GamePlayer[];
-  phase: string;
+  host_id: string;
   day: number;
-  game_log: string[];
-  werewolf_kill_target?: string | null;
+  phase: "lobby" | "werewolf_turn" | "witch_turn" | "seer_turn" | "day" | "voting" | "ended";
+  nightly_deaths: string[];
 }
 
-interface PlayerProfile {
-  id: string;
-  name: string;
-  avatar_url: string;
-  stats: {
-    games_played: number;
-    wins: number;
-    losses: number;
-    roles: { [key: string]: number };
-  };
-}
+const MAX_PLAYERS = 12;
 
 export default function GamePage() {
-  const { roomId } = useParams();
+  const { roomId: rawRoomId } = useParams();
+  const roomId = Array.isArray(rawRoomId) ? rawRoomId[0] : rawRoomId;
   const { profile: myProfile } = useProfile();
-  const [socket, setSocket] = useState<WebSocket | null>(null);
+  
+  const socketRef = useRef<WebSocket | null>(null);
   const [gameState, setGameState] = useState<GameState | null>(null);
-  const [playerProfiles, setPlayerProfiles] = useState<Record<string, PlayerProfile>>({});
-  const [myRole, setMyRole] = useState<string | undefined>(undefined);
+  const [gameLog, setGameLog] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleAction = useCallback((action: string, payload: object) => {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: action, payload }));
+  const handleAction = useCallback((action: string, payload: object = {}) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: action, payload }));
+    } else {
+      console.error("WebSocket is not connected or ready.");
     }
-  }, [socket]);
+  }, []);
 
+  // Single, robust useEffect for all setup
   useEffect(() => {
-    if (!myProfile || !roomId) return;
+    if (!roomId || !myProfile) return;
 
-    const ws = new WebSocket(`ws://localhost:8000/ws/${roomId}/${myProfile.id}`);
+    let isMounted = true;
 
-    ws.onopen = () => console.log('WebSocket connected');
-    ws.onclose = () => console.log('WebSocket disconnected');
+    const setup = async () => {
+      try {
+        // 1. Fetch initial state via HTTP
+        const initialState = await getGame(roomId);
+        if (!isMounted) return;
+        setGameState(initialState);
+        setGameLog(["成功获取游戏状态。"]);
 
-    ws.onmessage = async (event) => {
-      const message = JSON.parse(event.data);
-      console.log('Received message:', message);
+        // 2. Establish WebSocket connection
+        const ws = new WebSocket(`ws://localhost:8000/ws/${roomId}/${myProfile.id}`);
+        socketRef.current = ws;
 
-      switch (message.type) {
-        case 'game_start':
-        case 'game_state_update': {
-          const newGameState: GameState = message.room;
-          setGameState(newGameState);
-          const me = newGameState.players.find(p => p.profile_id === myProfile.id);
-          if (me && me.role) {
-            setMyRole(me.role);
+        ws.onopen = () => {
+          if (isMounted) setGameLog(prev => [...prev, "已成功连接到服务器。"]);
+        };
+
+        ws.onclose = () => {
+          if (isMounted) setGameLog(prev => [...prev, "与服务器断开连接。"]);
+        };
+
+        ws.onmessage = (event) => {
+          if (!isMounted) return;
+          const message = JSON.parse(event.data);
+          
+          if (message.type.includes('UPDATE') || message.type.includes('START')) {
+            setGameState(message.payload);
+          } else if (message.type === 'PLAYER_JOINED') {
+             setGameState(prev => prev ? { ...prev, players: [...prev.players, message.payload] } : null);
+             setGameLog(prev => [...prev, `玩家 ${message.payload.name} 已加入。`]);
+          } else if (message.type === 'ROLE_ASSIGNMENT') {
+              setGameLog(prev => [...prev, `你的身份是: ${message.payload.role}`]);
+          } else {
+            setGameLog(prev => [...prev, message.payload.log || `收到消息: ${message.type}`])
           }
-          // Fetch profiles for any new players
-          setPlayerProfiles(prevProfiles => {
-            const updatedProfiles = { ...prevProfiles };
-            (async () => {
-              for (const player of newGameState.players) {
-                if (!updatedProfiles[player.profile_id]) {
-                  try {
-                    const pData = await getProfile(player.profile_id);
-                    updatedProfiles[player.profile_id] = pData;
-                  } catch (e) { console.error(e); }
-                }
-              }
-              setPlayerProfiles(updatedProfiles);
-            })();
-            return updatedProfiles;
-          });
-          break;
-        }
-        case 'phase_change':
-          setGameState(prev => prev ? { ...prev, phase: message.payload.phase } : null);
-          break;
-        // Add more cases for other specific updates
+        };
+
+        ws.onerror = (err) => {
+          console.error("WebSocket error:", err);
+          if (isMounted) setError("WebSocket 连接错误。");
+        };
+
+      } catch (err) {
+        console.error("Setup failed:", err);
+        if (isMounted) setError("无法加载或连接到游戏房间。");
+      } finally {
+        if (isMounted) setIsLoading(false);
       }
     };
 
-    setSocket(ws);
+    setup();
 
-    return () => ws.close();
-  }, [roomId, myProfile]);
+    return () => {
+      isMounted = false;
+      socketRef.current?.close();
+    };
+  // This effect runs only once on mount, which is the correct pattern.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId, myProfile?.id]);
 
-  if (!gameState || !myProfile) {
-    return <div className="text-white text-center p-8">Loading Game...</div>;
-  }
+  const me = gameState?.players.find(p => p.profile_id === myProfile?.id);
+
+  const renderPlayerSlot = (seatIndex: number) => {
+    const player = gameState?.players.find(p => p.seat === seatIndex);
+    const canTakeSeat = !player && me && me.seat === null;
+
+    return (
+      <div key={seatIndex} className="w-24 h-24 border-2 border-green-500 rounded-lg flex items-center justify-center p-2">
+        {player ? (
+          <div className={`text-center ${!player.is_alive ? 'opacity-40' : ''}`}>
+             <PlayerAvatar profile={{id: player.profile_id, name: player.name, avatar_url: player.avatar_url}} />
+             <p className="text-white text-xs mt-1 truncate">{player.name}</p>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center">
+            <span className="text-gray-600 text-sm">空位</span>
+            {canTakeSeat && (
+              <button
+                onClick={() => handleAction('TAKE_SEAT', { seat_number: seatIndex })}
+                className="mt-2 px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs"
+              >
+                上位
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  if (isLoading) return <div className="text-white text-center p-8">正在加载游戏...</div>;
+  if (error) return <div className="text-red-500 text-center p-8">{error}</div>;
+  if (!gameState || !myProfile) return <div className="text-white text-center p-8">无法加载游戏数据。</div>;
+
+  const seatIndices = Array.from({ length: MAX_PLAYERS }, (_, i) => i);
 
   return (
-    <div className="container mx-auto p-4 flex flex-col h-screen">
-      <header className="mb-4">
-        <h1 className="text-3xl font-bold text-white">Room: {roomId} - Day {gameState.day} - {gameState.phase.toUpperCase()}</h1>
+    <div className="bg-black text-white h-screen flex flex-col p-4 font-mono">
+      <header className="w-full h-12 border-2 border-red-500 mb-4 flex items-center justify-between px-4">
+        <h1 className="text-xl font-bold">房间: {roomId}</h1>
+        <div className="text-xl">
+            <span>第 {gameState.day} 天</span> - <span>{gameState.phase.toUpperCase()}</span>
+        </div>
+         <div>
+            {gameState.nightly_deaths.length > 0 && `死亡: ${gameState.nightly_deaths.length}`}
+        </div>
       </header>
 
-      <main className="flex-grow grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="md:col-span-2 grid grid-cols-3 lg:grid-cols-4 gap-4 content-start">
-          {gameState.players.map((player) => {
-            const playerProfile = playerProfiles[player.profile_id];
-            if (!playerProfile) return <div key={player.id}>Loading...</div>;
-            return (
-              <div key={player.id} className={`p-2 rounded-lg text-center ${!player.is_alive ? 'opacity-40' : ''}`}>
-                <PlayerAvatar profile={playerProfile} />
-                <p className="text-white mt-1 truncate">{playerProfile.name}</p>
-              </div>
-            );
-          })}
+      <main className="flex-grow grid grid-cols-[1fr_4fr_1fr] grid-rows-1 gap-4">
+        <div className="flex flex-col justify-around items-center">
+          {seatIndices.slice(0, 6).map(renderPlayerSlot)}
         </div>
-
-        <div className="h-full flex flex-col">
-          <GameLog logs={gameState.game_log} />
+        <div className="border-2 border-white h-full overflow-y-auto p-4 flex flex-col-reverse">
+          <GameLog logs={gameLog} />
+        </div>
+        <div className="flex flex-col justify-around items-center">
+          {seatIndices.slice(6, 12).map(renderPlayerSlot)}
         </div>
       </main>
 
-      <footer className="mt-4 p-4 bg-gray-800 rounded-t-lg">
-        <ActionBar 
-          gameState={gameState} 
-          myProfile={myProfile} 
-          myRole={myRole}
-          onAction={handleAction} 
-        />
+      <footer className="mt-4 shrink-0 p-4 bg-gray-900 rounded-lg min-h-[100px] w-full max-w-4xl flex items-center justify-center">
+          {me && (
+            <ActionBar 
+              gameState={gameState}
+              myPlayer={me}
+              onAction={handleAction}
+              ws={socketRef.current}
+            />
+          )}
       </footer>
     </div>
   );

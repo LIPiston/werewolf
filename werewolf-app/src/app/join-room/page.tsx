@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useProfile } from '@/lib/ProfileContext';
-import { joinRoom } from '@/lib/api';
+import { joinGame } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 
 export default function JoinRoom() {
@@ -19,9 +19,9 @@ export default function JoinRoom() {
     }
     setError(null);
     try {
-      const data = await joinRoom(roomId, profile.id);
-      localStorage.setItem('player_id', data.player_id); // In-game ID
-      localStorage.setItem('is_host', data.is_host ? 'true' : 'false');
+      const data = await joinGame(roomId, profile.id);
+      // We no longer need to store player_id or is_host in localStorage
+      // The backend and game state will manage this.
       router.push(`/game/${data.room_id}`);
     } catch (err: unknown) {
       if (err instanceof Error) {

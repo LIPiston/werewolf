@@ -1,6 +1,6 @@
 from fastapi import WebSocket
 from typing import Dict
-from models import Game, Player
+from models import Game, Player, Role
 from game_manager import game_manager
 from connections import connection_manager
 
@@ -14,11 +14,21 @@ async def handle_ws_action(websocket: WebSocket, room_id: str, player_id: str, d
     if not game:
         return
 
-    player = next((p for p in game.players if p.id == player_id), None)
+    # player_id from the URL is the PROFILE_ID
+    player = next((p for p in game.players if p.profile_id == player_id), None)
+    
+    # Allow START_GAME even if player is just the host
+    if action_type == "START_GAME":
+        if game.host_id == player_id:
+            await handle_start_game(game)
+        return
+
     if not player:
         return
 
-    if action_type == "WEREWOLF_VOTE":
+    if action_type == "TAKE_SEAT":
+        await handle_take_seat(game, player, data.get("payload"))
+    elif action_type == "WEREWOLF_VOTE":
         await handle_werewolf_vote(game, player, data.get("payload"))
     elif action_type == "WITCH_ACTION":
         await handle_witch_action(game, player, data.get("payload"))
@@ -26,6 +36,19 @@ async def handle_ws_action(websocket: WebSocket, room_id: str, player_id: str, d
         await handle_seer_check(game, player, data.get("payload"))
     elif action_type == "VOTE_PLAYER":
         await handle_day_vote(game, player, data.get("payload"))
+    elif action_type == "CONFIRM_ACTION":
+        await game_manager.advance_game_phase(game)
+
+async def handle_start_game(game: Game):
+    """Handles the host's request to start the game."""
+    if game.phase == "lobby":
+        await game_manager.start_game(game.room_id)
+
+async def handle_take_seat(game: Game, player: Player, payload: Dict):
+    """Handles a player taking a seat."""
+    seat_number = payload.get("seat_number")
+    if isinstance(seat_number, int):
+        await game_manager.take_seat(game.room_id, player.id, seat_number)
 
 async def handle_day_vote(game: Game, player: Player, payload: Dict):
     """Handles a player voting to exile another player."""
@@ -52,7 +75,7 @@ async def handle_day_vote(game: Game, player: Player, payload: Dict):
 
 async def handle_seer_check(game: Game, player: Player, payload: Dict):
     """Handles the seer checking a player's identity."""
-    if game.phase != "seer_turn" or player.role != "seer" or not player.is_alive:
+    if game.phase != "seer_turn" or player.role != Role.SEER or not player.is_alive:
         return
 
     target_player_id = payload.get("target_player_id")
@@ -63,7 +86,7 @@ async def handle_seer_check(game: Game, player: Player, payload: Dict):
     if not target_player:
         return
 
-    result = "good" if target_player.role != "werewolf" else "bad"
+    result = "good" if target_player.role != Role.WEREWOLF else "bad"
     game.seer_check_result = {target_player_id: result}
 
     # Send the result only to the seer
@@ -77,7 +100,7 @@ async def handle_seer_check(game: Game, player: Player, payload: Dict):
 
 async def handle_witch_action(game: Game, player: Player, payload: Dict):
     """Handles the witch using a potion."""
-    if game.phase != "witch_turn" or player.role != "witch" or not player.is_alive or game.witch_used_potion_tonight:
+    if game.phase != "witch_turn" or player.role != Role.WITCH or not player.is_alive or game.witch_used_potion_tonight:
         return
 
     action = payload.get("action") # "save" or "poison"
@@ -100,7 +123,7 @@ async def handle_witch_action(game: Game, player: Player, payload: Dict):
 
 async def handle_werewolf_vote(game: Game, player: Player, payload: Dict):
     """Handles a werewolf voting to kill a player."""
-    if game.phase != "night" or player.role != "werewolf" or not player.is_alive:
+    if game.phase != "werewolf_turn" or player.role != Role.WEREWOLF or not player.is_alive:
         return
 
     target_player_id = payload.get("target_player_id")
@@ -116,7 +139,7 @@ async def handle_werewolf_vote(game: Game, player: Player, payload: Dict):
     })
 
     # Check if all werewolves have voted
-    werewolves = [p for p in game.players if p.role == "werewolf" and p.is_alive]
+    werewolves = [p for p in game.players if p.role == Role.WEREWOLF and p.is_alive]
     if len(game.werewolf_votes) == len(werewolves):
         # process_werewolf_votes(game)
         # Potentially trigger the next phase of the night (e.g., witch's turn)

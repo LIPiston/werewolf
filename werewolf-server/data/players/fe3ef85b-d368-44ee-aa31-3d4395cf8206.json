@@ -1,0 +1,15 @@
+{
+    "id": "fe3ef85b-d368-44ee-aa31-3d4395cf8206",
+    "name": "11",
+    "avatar_url": null,
+    "stats": {
+        "games_played": 0,
+        "wins": 0,
+        "losses": 0,
+        "roles": {
+            "werewolf": 0,
+            "god": 0,
+            "villager": 0
+        }
+    }
+}

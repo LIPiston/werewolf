@@ -37,30 +37,43 @@ export async function updateProfileName(profileId: string, name: string) {
   return response.json();
 }
 
-// === Room Management ===
+// === Game Management ===
 
-export async function createRoom(maxPlayers: number, hostProfileId: string) {
-  const response = await fetch(`${API_BASE_URL}/room/create`, {
+export async function getGameTemplates() {
+    const response = await fetch(`${API_BASE_URL}/game-templates`);
+    if (!response.ok) throw new Error("Failed to get game templates");
+    return response.json();
+}
+
+export async function createGame(templateName: string, hostProfileId: string) {
+  const gameConfig = { template_name: templateName };
+  const response = await fetch(`${API_BASE_URL}/games/create`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ max_players: maxPlayers, host_profile_id: hostProfileId }),
+    body: JSON.stringify({ host_profile_id: hostProfileId, game_config: gameConfig }),
   });
   if (!response.ok) {
     const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to create room");
+    throw new Error(errorData.detail || "Failed to create game");
   }
   return response.json();
 }
 
-export async function joinRoom(roomId: string, playerProfileId: string) {
-  const response = await fetch(`${API_BASE_URL}/room/join`, {
+export async function getGame(roomId: string) {
+    const response = await fetch(`${API_BASE_URL}/games/${roomId}`);
+    if (!response.ok) throw new Error("Failed to get game state");
+    return response.json();
+}
+
+export async function joinGame(roomId: string, profileId: string) {
+  const response = await fetch(`${API_BASE_URL}/games/${roomId}/join`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ room_id: roomId, player_profile_id: playerProfileId }),
+    body: JSON.stringify({ profile_id: profileId }),
   });
   if (!response.ok) {
     const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to join room");
+    throw new Error(errorData.detail || "Failed to join game");
   }
   return response.json();
 }

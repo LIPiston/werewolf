@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import React, { createContext, useState, useEffect, useContext, useMemo, useCallback } from 'react';
 import { getProfile } from './api';
 
 interface ProfileStats {
@@ -17,7 +17,7 @@ interface ProfileStats {
 interface Profile {
   id: string;
   name: string;
-  avatar_url: string;
+  avatar_url: string | null;
   stats: ProfileStats;
 }
 
@@ -51,17 +51,23 @@ export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ child
     loadProfile();
   }, []);
 
-  const handleSetProfile = (newProfile: Profile | null) => {
+  const handleSetProfile = useCallback((newProfile: Profile | null) => {
     setProfile(newProfile);
     if (newProfile) {
       localStorage.setItem('profile_id', newProfile.id);
     } else {
       localStorage.removeItem('profile_id');
     }
-  };
+  }, []);
+
+  const value = useMemo(() => ({
+    profile,
+    setProfile: handleSetProfile,
+    isLoading
+  }), [profile, isLoading, handleSetProfile]);
 
   return (
-    <ProfileContext.Provider value={{ profile, setProfile: handleSetProfile, isLoading }}>
+    <ProfileContext.Provider value={value}>
       {children}
     </ProfileContext.Provider>
   );
