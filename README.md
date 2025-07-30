@@ -39,10 +39,13 @@
 
 - `werewolf-app/`：前端应用 (Next.js)
 - `werewolf-server/`：后端 API (Python FastAPI)
-- `werewolf/`：[参考代码](https://github.com/xiong35/werewolf)
 - `docker-compose.yml`：Docker Compose 配置文件
 - `bug.md`：项目当前状态、计划和已知 Bug 列表
 
 ## AI 协助开发
 
 本项目在开发过程中得到了 AI 的协助，包括但不限于代码生成、问题诊断和解决方案提供。AI 的参与旨在提高开发效率和代码质量。
+
+
+## thanks
+参考了xiong35/[werewolf](https://github.com/xiong35/werewolf)
