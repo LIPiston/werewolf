@@ -8,9 +8,8 @@
 
 ### 技术栈
 
-- **前端：** Next.js + Tailwind CSS + merakiui
+- **前端：** Next.js + Tailwind CSS
 - **后端：** Python FastAPI
-- **数据库：** SQLite
 - **通信：** HTTP / WebSocket
 - **容器化：** Docker / Docker Compose
 
@@ -48,4 +47,5 @@
 
 
 ## thanks
-参考了xiong35/[werewolf](https://github.com/xiong35/werewolf)
+参考了xiong35/[werewolf](https://github.com/xiong35/werewolf)  
+ merakiui
