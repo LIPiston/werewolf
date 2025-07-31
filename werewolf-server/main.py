@@ -6,9 +6,11 @@ import uuid
 import os
 from connections import connection_manager
 from ws_actions import handle_ws_action
-from game_manager import game_manager
+from game_manager import GameManager
 from models import Game, Player, GameConfig, Profile, GAME_TEMPLATES
 import profile_manager
+import phase_handlers
+import game_logic
 
 app = FastAPI()
 
@@ -28,6 +30,10 @@ app.add_middleware(
 profile_manager.ensure_data_dirs()
 
 app.mount("/data/avatars", StaticFiles(directory=profile_manager.AVATARS_DIR), name="avatars")
+
+game_manager = GameManager()
+phase_handlers.initialize_game_manager(game_manager)
+game_logic.initialize_game_manager(game_manager)
 
 # === Profile Management Endpoints ===
 
@@ -74,14 +80,12 @@ async def upload_avatar(player_id: str, file: UploadFile = File(...)):
 
 @app.get("/game-templates")
 async def get_game_templates():
-    """Returns the list of available game templates."""
     return GAME_TEMPLATES
+
 @app.get("/games")
 async def get_games():
-    """Returns a list of all active, joinable games."""
     active_games = game_manager.get_all_games()
     
-    # We want to return a simplified list of rooms, not the full game state
     room_list = []
     for room_id, game in active_games.items():
         if game.phase == "lobby":
@@ -101,12 +105,9 @@ class CreateGameRequest(BaseModel):
 
 @app.post("/games/create")
 async def create_game(request: CreateGameRequest):
-    """Creates a new game room."""
     if request.host_profile_id == "test":
-        # This is a health check, don't actually create a game
         return {"room_id": "test", "player_id": "test"}
 
-    print(f"Creating game with template: {request.game_config.template_name}") # 添加日志
     game = game_manager.create_game(request.host_profile_id, request.game_config)
     
     host_profile = profile_manager.read_player_profile(request.host_profile_id)
@@ -129,7 +130,6 @@ class JoinGameRequest(BaseModel):
 
 @app.post("/games/{room_id}/join")
 async def join_game(room_id: str, request: JoinGameRequest):
-    """Allows a player to join an existing game room."""
     game = game_manager.get_game(room_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
@@ -145,19 +145,17 @@ async def join_game(room_id: str, request: JoinGameRequest):
         avatar_url=profile.avatar_url,
         seat=None
     )
-    print(f"Player {new_player.name} ({new_player.id}) joined room {room_id}") # 添加日志
     game.players.append(new_player)
     
     await connection_manager.broadcast(room_id, {
-        "type": "PLAYER_JOINED",
-        "payload": new_player.dict()
+        "type": "GAME_STATE_UPDATE",
+        "payload": game.dict()
     })
 
     return {"room_id": game.room_id, "player_id": new_player.id}
 
 @app.get("/games/{room_id}", response_model=Game)
 async def get_game_state(room_id: str):
-    """Returns the current state of a game."""
     game = game_manager.get_game(room_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
@@ -181,11 +179,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, player_id: str)
     except WebSocketDisconnect:
         connection_manager.disconnect(room_id, player_id)
         await connection_manager.broadcast(room_id, {"type": "PLAYER_DISCONNECTED", "payload": {"player_id": player_id}})
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
-
-@app.websocket("/ws/health/{client_id}")
-async def websocket_health_check(websocket: WebSocket, client_id: str):
-    await websocket.accept()
-    await websocket.close()

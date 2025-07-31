@@ -5,6 +5,9 @@ import { ProfileProvider } from "@/lib/ProfileContext";
 export const metadata: Metadata = {
   title: "Werewolf Game",
   description: "A modern Werewolf game built with Next.js and FastAPI",
+  icons: {
+    icon: '/favicon.svg',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

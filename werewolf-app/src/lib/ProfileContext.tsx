@@ -25,12 +25,15 @@ interface ProfileContextType {
   profile: Profile | null;
   setProfile: (profile: Profile | null) => void;
   isLoading: boolean;
+  playerId: string | null;
+  setPlayerId: (id: string | null) => void;
 }
 
 const ProfileContext = createContext<ProfileContextType | undefined>(undefined);
 
 export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [playerId, setPlayerId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -63,8 +66,10 @@ export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const value = useMemo(() => ({
     profile,
     setProfile: handleSetProfile,
-    isLoading
-  }), [profile, isLoading, handleSetProfile]);
+    isLoading,
+    playerId,
+    setPlayerId
+  }), [profile, isLoading, handleSetProfile, playerId]);
 
   return (
     <ProfileContext.Provider value={value}>

@@ -14,7 +14,7 @@ interface GameTemplate {
 }
 
 export default function CreateRoom() {
-  const { profile } = useProfile();
+  const { profile, setPlayerId } = useProfile();
   const [templates, setTemplates] = useState<GameTemplate[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +26,8 @@ export default function CreateRoom() {
         const data = await getGameTemplates();
         setTemplates(data);
         if (data.length > 0) {
-          setSelectedTemplate(data[0].name);
+          const defaultTemplate = data.find((t: GameTemplate) => t.name === "6人暗牌局");
+          setSelectedTemplate(defaultTemplate ? defaultTemplate.name : data[0].name);
         }
       } catch {
         setError("无法加载游戏模板。");
@@ -49,6 +50,7 @@ export default function CreateRoom() {
     setError(null);
     try {
       const data = await createGame(selectedTemplate, profile.id);
+      setPlayerId(data.player_id);
       router.push(`/game/${data.room_id}`);
     } catch (err: unknown) {
       if (err instanceof Error) {

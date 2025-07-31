@@ -262,6 +262,27 @@ class GameManager:
         if game and game.phase == expected_phase:
             await self.advance_game_phase(game)
 
+    async def process_werewolf_votes(self, game: Game):
+        """Processes the votes from the werewolves to determine the kill target."""
+        if not game.werewolf_votes:
+            print(f"No werewolf votes in Room {game.room_id}. Advancing phase.")
+            await self.advance_game_phase(game)
+            return
+
+        # Count votes
+        from collections import Counter
+        vote_counts = Counter(game.werewolf_votes.values())
+        
+        # Find the player with the most votes
+        # In case of a tie, the first one encountered wins.
+        # A more complex rule could be implemented here if needed.
+        most_voted_player_id = vote_counts.most_common(1)[0][0]
+        
+        game.werewolf_kill_target = most_voted_player_id
+        print(f"Room {game.room_id}: Werewolves decided to kill Player {most_voted_player_id}")
+
+        await self.advance_game_phase(game)
+
     async def advance_game_phase(self, game: Game):
         """Advances the game to the next phase."""
         if self.check_game_over(game):

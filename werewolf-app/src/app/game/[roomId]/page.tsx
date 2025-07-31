@@ -44,8 +44,22 @@ interface GameState {
   players: GamePlayer[];
   host_id: string;
   day: number;
-  phase: "lobby" | "werewolf_turn" | "witch_turn" | "seer_turn" | "day" | "voting" | "ended";
+  phase: "lobby" | "guard_turn" | "werewolf_turn" | "seer_turn" | "witch_turn" | "night_results" | "day_discussion" | "voting" | "vote_result" | "sheriff_election" | "sheriff_speech" | "sheriff_vote" | "sheriff_result" | "ended";
   nightly_deaths: string[];
+  phase_end_time?: number | null;
+  current_speaker_id?: string | null;
+  sheriff_candidates?: string[];
+}
+
+interface Teammate {
+  id: string;
+  name: string;
+  seat: number;
+}
+
+interface PersonalRoleAssignmentPayload {
+    role: string;
+    teammates?: Teammate[];
 }
 
 const MAX_PLAYERS = 12;
@@ -53,7 +67,7 @@ const MAX_PLAYERS = 12;
 function GamePageContent() {
   const { roomId: rawRoomId } = useParams();
   const roomId = Array.isArray(rawRoomId) ? rawRoomId[0] : rawRoomId;
-  const { profile: myProfile } = useProfile();
+  const { profile: myProfile, playerId } = useProfile();
   const { setLastMessage } = useWebSocket();
   
   const socketRef = useRef<WebSocket | null>(null);
@@ -61,6 +75,27 @@ function GamePageContent() {
   const [gameLog, setGameLog] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!gameState?.phase_end_time) {
+      setCountdown(null);
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      const now = Date.now() / 1000;
+      const remaining = Math.round(gameState.phase_end_time! - now);
+      if (remaining > 0) {
+        setCountdown(remaining);
+      } else {
+        setCountdown(0);
+        clearInterval(intervalId);
+      }
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [gameState?.phase_end_time]);
 
   const handleAction = useCallback((action: string, payload: object = {}) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
@@ -82,7 +117,8 @@ function GamePageContent() {
         setGameState(initialState);
         setGameLog(["成功获取游戏状态。"]);
 
-        const ws = new WebSocket(`ws://localhost:8000/ws/${roomId}/${myProfile.id}`);
+        const idToConnect = playerId || myProfile.id;
+        const ws = new WebSocket(`ws://localhost:8000/ws/${roomId}/${idToConnect}`);
         socketRef.current = ws;
 
         ws.onopen = () => {
@@ -95,6 +131,7 @@ function GamePageContent() {
 
         ws.onmessage = (event: MessageEvent) => {
           if (!isMounted) return;
+          
           setLastMessage(event); // Update context with the new message
           const message = JSON.parse(event.data);
 
@@ -103,13 +140,32 @@ function GamePageContent() {
           } else if (message.type === 'PLAYER_JOINED') {
              setGameState(prev => prev ? { ...prev, players: [...prev.players, message.payload] } : null);
              setGameLog(prev => [...prev, `玩家 ${message.payload.name} 已加入。`]);
-          } else if (message.type === 'ROLE_ASSIGNMENT') {
-              setGameLog(prev => [...prev, `你的身份是: ${message.payload.role}`]);
+          } else if (message.type === 'ROLE_ASSIGNMENT' || message.type === 'PERSONAL_ROLE_ASSIGNMENT') {
+             const payload = message.payload as PersonalRoleAssignmentPayload;
+             const { role, teammates } = payload;
+             let logMessage = `你的身份是: ${role}`;
+             if (teammates && teammates.length > 0) {
+                 const teammateNames = teammates.map((t) => `${t.seat}号(${t.name})`).join('、');
+                 logMessage += ` | 你的狼队友是: ${teammateNames}`;
+             }
+             setGameLog(prev => [...prev, logMessage]);
           } else if (message.type === 'PHASE_CHANGE') {
-            setGameState(prev => prev ? { ...prev, phase: message.payload.phase, day: message.payload.day } : null);
+            setGameState(prev => prev ? { ...prev, phase: message.payload.phase } : null);
             setGameLog(prev => [...prev, `进入阶段: ${message.payload.phase}`]);
+          } else if (message.type === 'NIGHT_RESULTS') {
+            const { deaths, day } = message.payload;
+            setGameState(prev => prev ? { ...prev, day: day } : null);
+            if (deaths.length > 0) {
+              setGameLog(prev => [...prev, `第 ${day-1} 天夜晚, ${deaths.join(' 和 ')} 被杀了。`]);
+            } else {
+              setGameLog(prev => [...prev, `第 ${day-1} 天夜晚, 是一个平安夜。`]);
+            }
+          } else if (message.type === 'GAME_EVENT') {
+            setGameLog(prev => [...prev, message.payload.message]);
           } else if (message.payload?.log) {
             setGameLog(prev => [...prev, message.payload.log]);
+          } else if (message.type === 'SEER_RESULT') {
+           // No longer show an alert. The action bar will handle the result display.
           } else if (!message.type.endsWith('_PANEL')) { // Don't log panel messages
             setGameLog(prev => [...prev, `收到消息: ${message.type}`]);
           }
@@ -135,7 +191,7 @@ function GamePageContent() {
       socketRef.current?.close();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, myProfile?.id, setLastMessage]);
+  }, [roomId, myProfile?.id, playerId, setLastMessage]);
 
   const me = gameState?.players.find(p => p.profile_id === myProfile?.id);
 
@@ -146,10 +202,13 @@ function GamePageContent() {
     return (
       <div key={seatIndex} className="w-20 h-24 bg-gray-800 rounded-lg shadow-lg flex flex-col items-center justify-center p-1 transition-all duration-300">
         {player ? (
-          <div className={`text-center ${!player.is_alive ? 'opacity-40 grayscale' : ''}`}>
+          <div className={`relative text-center ${!player.is_alive ? 'opacity-40 grayscale' : ''}`}>
              <PlayerAvatar profile={{id: player.profile_id, name: player.name, avatar_url: player.avatar_url}} />
              <p className="text-white text-sm font-medium mt-2 truncate">{player.is_sheriff && '👑 '}{player.name}</p>
              <p className="text-gray-400 text-xs">{player.seat}号位</p>
+             {gameState?.current_speaker_id === player.id && (
+               <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-0 h-0 border-l-8 border-r-8 border-t-8 border-l-transparent border-r-transparent border-t-yellow-400"></div>
+             )}
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center text-center">
@@ -184,6 +243,12 @@ function GamePageContent() {
                     <span className="text-lg font-semibold text-yellow-400">第 {gameState.day} 天</span>
                     <span className="mx-2 text-gray-500">|</span>
                     <span className="text-lg font-semibold text-green-400">{gameState.phase.toUpperCase()}</span>
+                    {countdown !== null && (
+                       <>
+                           <span className="mx-2 text-gray-500">|</span>
+                           <span className="text-lg font-semibold text-red-400">{countdown}s</span>
+                       </>
+                    )}
                 </div>
                 <div className="text-sm text-red-500">
                     {gameState.nightly_deaths.length > 0 && `死亡: ${gameState.nightly_deaths.length}`}

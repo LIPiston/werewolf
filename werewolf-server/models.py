@@ -88,21 +88,54 @@ class Game(BaseModel):
     host_id: str
     game_config: Any
     day: int = 0
-    phase: Literal["lobby", "werewolf_turn", "witch_turn", "seer_turn", "day", "voting", "ended"] = "lobby"
+    phase: Literal[
+        "lobby", "guard_turn", "werewolf_turn", "seer_turn", "witch_turn",
+        "night_results",
+        "sheriff_election", "sheriff_speech", "sheriff_vote", "sheriff_result",
+        "day_discussion", "voting", "vote_result",
+        "ended"
+    ] = "lobby"
+    phase_end_time: Optional[float] = None
+    current_speaker_id: Optional[str] = None
+
+    # Sheriff election
+    sheriff_candidates: List[str] = []
+    sheriff_votes: Dict[str, str] = {}
+
+    # Night actions state
     werewolf_kill_target: Optional[str] = None
     werewolf_votes: Dict[str, str] = {}
+    guard_target: Optional[str] = None
+    last_guarded_id: Optional[str] = None # Stores the ID of the player guarded on the PREVIOUS night
+    witch_save_target: Optional[str] = None
+    witch_poison_target: Optional[str] = None
+    seer_check_result: Optional[Dict[str, str]] = None
+
+    # Witch potion status
     witch_has_save: bool = True
     witch_has_poison: bool = True
     witch_used_potion_tonight: bool = False
-    witch_save_target: Optional[str] = None
-    seer_check_result: Optional[Dict[str, str]] = None
+
+    # Day state
     day_votes: Dict[str, str] = {}
+
+    # Results
     nightly_deaths: List[str] = []
-    last_guarded_id: Optional[str] = None
 
 # --- Pre-defined Game Templates ---
 
 GAME_TEMPLATES: List[GameTemplate] = [
+    GameTemplate(
+        name="6人暗牌局",
+        player_counts=[6],
+        roles={
+            Role.WEREWOLF: 2,
+            Role.VILLAGER: 2,
+            Role.SEER: 1,
+            Role.GUARD: 1,
+        },
+        description="2狼, 2民, 预言家, 守卫"
+    ),
     GameTemplate(
         name="新手9人局",
         player_counts=[9],
@@ -137,16 +170,5 @@ GAME_TEMPLATES: List[GameTemplate] = [
             Role.HUNTER: 1,
         },
         description="2狼, 2民, 预言家, 猎人"
-    ),
-    GameTemplate(
-        name="6人暗牌局",
-        player_counts=[6],
-        roles={
-            Role.WEREWOLF: 2,
-            Role.VILLAGER: 2,
-            Role.SEER: 1,
-            Role.GUARD: 1,
-        },
-        description="2狼, 2民, 预言家, 守卫"
     ),
 ]

@@ -15,7 +15,7 @@ interface Room {
 }
 
 export default function JoinRoom() {
-  const { profile } = useProfile();
+  const { profile, setPlayerId } = useProfile();
   const [roomId, setRoomId] = useState('');
   const [rooms, setRooms] = useState<Room[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +47,7 @@ export default function JoinRoom() {
     setError(null);
     try {
       const data = await joinGame(roomId, profile.id);
+      setPlayerId(data.player_id);
       router.push(`/game/${data.room_id}`);
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -66,6 +67,7 @@ export default function JoinRoom() {
     setError(null);
     try {
       const data = await joinGame(id, profile.id);
+      setPlayerId(data.player_id);
       router.push(`/game/${data.room_id}`);
     } catch (err: unknown) {
       if (err instanceof Error) {

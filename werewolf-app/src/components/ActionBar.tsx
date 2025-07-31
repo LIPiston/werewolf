@@ -37,13 +37,16 @@ interface GameState {
   players: GamePlayer[];
   host_id: string;
   day: number;
-  phase: "lobby" | "werewolf_turn" | "witch_turn" | "seer_turn" | "day" | "voting" | "ended";
+  phase: "lobby" | "guard_turn" | "werewolf_turn" | "seer_turn" | "witch_turn" | "night_results" | "day_discussion" | "voting" | "vote_result" | "sheriff_election" | "sheriff_speech" | "sheriff_vote" | "sheriff_result" | "ended";
   werewolf_kill_target?: string | null;
   nightly_deaths: string[];
+  current_speaker_id?: string | null;
+  sheriff_candidates?: string[];
 }
 
 interface WerewolfPanelProps {
   players: GamePlayer[];
+  teammates?: { id: string; name: string; seat: number }[];
 }
 
 interface WitchPanelProps {
@@ -100,6 +103,10 @@ const ActionBar: React.FC<ActionBarProps> = ({ gameState, myPlayer, onAction }) 
   const [witchPanel, setWitchPanel] = useState<WitchPanelProps | null>(null);
   const [seerPanel, setSeerPanel] = useState<SeerPanelProps | null>(null);
   const [guardPanel, setGuardPanel] = useState<GuardPanelProps | null>(null);
+  const [seerResult, setSeerResult] = useState<{ target_name: string; role: string } | null>(null);
+  const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
+  const [witchAction, setWitchAction] = useState<{ action: 'save' | 'poison'; target_player_id?: string } | null>(null);
+
 
   useEffect(() => {
     if (!lastMessage) return;
@@ -115,16 +122,23 @@ const ActionBar: React.FC<ActionBarProps> = ({ gameState, myPlayer, onAction }) 
         break;
       case 'SEER_PANEL':
         setSeerPanel(message.payload);
+        setSelectedTarget(null);
         break;
       case 'GUARD_PANEL':
         setGuardPanel(message.payload);
+        setSelectedTarget(null);
+        break;
+      case 'SEER_RESULT':
+        // This is now handled by the page-level alert
         break;
       case 'PHASE_CHANGE':
-        // Reset all panels on phase change
+        // Reset all panels and selections on phase change
         setWerewolfPanel(null);
         setWitchPanel(null);
         setSeerPanel(null);
         setGuardPanel(null);
+        setSelectedTarget(null);
+        setWitchAction(null);
         break;
     }
   }, [lastMessage]);
@@ -147,9 +161,13 @@ const ActionBar: React.FC<ActionBarProps> = ({ gameState, myPlayer, onAction }) 
 
   if (werewolfPanel) {
     return (
-      <ActionPanel title="狼人请选择目标" onConfirm={() => onAction('CONFIRM_ACTION')}>
+      <ActionPanel title="狼人请选择目标" onConfirm={() => { if (selectedTarget) { onAction('WEREWOLF_VOTE', { target_player_id: selectedTarget }); setWerewolfPanel(null); } }}>
         {werewolfPanel.players.map(player => (
-          <ActionButton key={player.id} onClick={() => onAction('WEREWOLF_VOTE', { target_player_id: player.id })} className="bg-red-800">
+          <ActionButton
+            key={player.id}
+            onClick={() => setSelectedTarget(player.id)}
+            className={selectedTarget === player.id ? "bg-red-500 ring-2 ring-white" : "bg-red-800"}
+          >
             {player.name}
           </ActionButton>
         ))}
@@ -159,13 +177,22 @@ const ActionBar: React.FC<ActionBarProps> = ({ gameState, myPlayer, onAction }) 
 
   if (witchPanel) {
     return (
-      <ActionPanel title="女巫请行动" onConfirm={() => onAction('CONFIRM_ACTION')}>
+      <ActionPanel title="女巫请行动" onConfirm={() => { if (witchAction) { onAction('WITCH_ACTION', witchAction); setWitchPanel(null); } }}>
         <p className="w-full text-yellow-300 mb-2">狼人目标: {witchPanel.werewolf_target || '无人'}</p>
         {witchPanel.has_save && (
-          <ActionButton onClick={() => onAction('WITCH_ACTION', { action: 'save' })} className="bg-green-600">使用解药</ActionButton>
+          <ActionButton
+            onClick={() => setWitchAction({ action: 'save' })}
+            className={witchAction?.action === 'save' ? "bg-green-500 ring-2 ring-white" : "bg-green-600"}
+          >
+            使用解药
+          </ActionButton>
         )}
         {witchPanel.has_poison && witchPanel.players.map(player => (
-          <ActionButton key={player.id} onClick={() => onAction('WITCH_ACTION', { action: 'poison', target_player_id: player.id })} className="bg-purple-800">
+          <ActionButton
+            key={player.id}
+            onClick={() => setWitchAction({ action: 'poison', target_player_id: player.id })}
+            className={witchAction?.target_player_id === player.id ? "bg-purple-500 ring-2 ring-white" : "bg-purple-800"}
+          >
             毒杀 {player.name}
           </ActionButton>
         ))}
@@ -175,9 +202,13 @@ const ActionBar: React.FC<ActionBarProps> = ({ gameState, myPlayer, onAction }) 
   
   if (seerPanel) {
       return (
-          <ActionPanel title="预言家请查验" onConfirm={() => onAction('CONFIRM_ACTION')}>
+          <ActionPanel title="预言家请查验" onConfirm={() => { if (selectedTarget) { onAction('SEER_CHECK', { target_player_id: selectedTarget }); setSeerPanel(null); } }}>
               {seerPanel.players.map(player => (
-                  <ActionButton key={player.id} onClick={() => onAction('SEER_CHECK', { target_player_id: player.id })} className="bg-blue-800">
+                  <ActionButton
+                    key={player.id}
+                    onClick={() => setSelectedTarget(player.id)}
+                    className={selectedTarget === player.id ? "bg-blue-500 ring-2 ring-white" : "bg-blue-800"}
+                  >
                       查验 {player.name}
                   </ActionButton>
               ))}
@@ -187,17 +218,58 @@ const ActionBar: React.FC<ActionBarProps> = ({ gameState, myPlayer, onAction }) 
 
   if (guardPanel) {
       return (
-          <ActionPanel title="守卫请守护" onConfirm={() => onAction('CONFIRM_ACTION')}>
+          <ActionPanel title="守卫请守护" onConfirm={() => { if (selectedTarget) { onAction('GUARD_ACTION', { target_player_id: selectedTarget }); setGuardPanel(null); } }}>
               {guardPanel.players.map(player => (
                   <ActionButton
                       key={player.id}
-                      onClick={() => onAction('GUARD_ACTION', { target_player_id: player.id })}
+                      onClick={() => setSelectedTarget(player.id)}
                       disabled={player.id === guardPanel.last_guarded_id}
-                      className="bg-yellow-700"
+                      className={`${selectedTarget === player.id ? "bg-yellow-500 ring-2 ring-white" : "bg-yellow-700"} ${player.id === guardPanel.last_guarded_id ? 'bg-gray-600 cursor-not-allowed' : ''}`}
                   >
                       守护 {player.name}
                   </ActionButton>
               ))}
+          </ActionPanel>
+      );
+  }
+
+  if (gameState.phase === 'sheriff_election') {
+    const alreadyRan = gameState.sheriff_candidates?.includes(myPlayer.id);
+    return (
+        <ActionPanel title="竞选警长">
+            <ActionButton onClick={() => onAction('RUN_FOR_SHERIFF')} className="bg-yellow-600" disabled={alreadyRan}>
+                {alreadyRan ? "已参选" : "参与竞选"}
+            </ActionButton>
+        </ActionPanel>
+    );
+  }
+
+  if ((gameState.phase === 'sheriff_speech' || gameState.phase === 'day_discussion') && gameState.current_speaker_id === myPlayer.id) {
+    return (
+        <ActionPanel title="轮到你发言">
+            <ActionButton onClick={() => onAction('PASS_TURN')} className="bg-gray-600">
+                结束发言
+            </ActionButton>
+        </ActionPanel>
+    );
+  }
+
+  if (gameState.phase === 'sheriff_vote') {
+      return (
+          <ActionPanel title="警长投票">
+              {gameState.sheriff_candidates?.map(candidateId => {
+                  const candidate = gameState.players.find(p => p.id === candidateId);
+                  if (!candidate) return null;
+                  return (
+                      <ActionButton
+                          key={candidate.id}
+                          onClick={() => onAction('SHERIFF_VOTE', { target_player_id: candidate.id })}
+                          className="bg-blue-800"
+                      >
+                          投票给 {candidate.name}
+                      </ActionButton>
+                  );
+              })}
           </ActionPanel>
       );
   }
