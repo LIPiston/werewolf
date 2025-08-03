@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { ProfileProvider } from "@/lib/ProfileContext";
 
 export const metadata: Metadata = {
   title: "Werewolf Game",
@@ -14,7 +13,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className="bg-gray-900">
-        <ProfileProvider>{children}</ProfileProvider>
+        {children}
       </body>
     </html>
   );

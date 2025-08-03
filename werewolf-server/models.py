@@ -1,20 +1,19 @@
 from enum import Enum
-from pydantic import BaseModel, Field, ConfigDict, field_serializer
-from typing import List, Dict, Literal, Optional, Any
+from pydantic import BaseModel, Field
+from typing import List, Dict, Optional, Any, Literal
 
-# --- Game-related Enums and Models ---
-
+# 1. 角色定义 (Role Definitions)
 class Role(str, Enum):
     """Enumeration of all possible roles in the game."""
-    WEREWOLF = "狼人"
     VILLAGER = "平民"
+    WEREWOLF = "狼人"
     SEER = "预言家"
     WITCH = "女巫"
     HUNTER = "猎人"
-    GUARD = "守卫"
     IDIOT = "白痴"
-    WOLF_KING = "狼王"
+    GUARD = "守卫"
     KNIGHT = "骑士"
+    WOLF_KING = "狼王"
     WHITE_WOLF_KING = "白狼王"
     WOLF_BEAUTY = "狼美人"
     SNOW_WOLF = "雪狼"
@@ -22,18 +21,80 @@ class Role(str, Enum):
     EVIL_KNIGHT = "恶灵骑士"
     HIDDEN_WOLF = "隐狼"
 
+# 2. 游戏阶段 (Game Stage)
+class Stage(str, Enum):
+    """Overall game state machine."""
+    WAITING = "WAITING"
+    ROLE_ASSIGN = "ROLE_ASSIGN"
+    NIGHT_START = "NIGHT_START"
+    NIGHT_SKILLS = "NIGHT_SKILLS"
+    NIGHT_RESOLVE = "NIGHT_RESOLVE"
+    DAWN = "DAWN"
+    SPEECH_ORDER = "SPEECH_ORDER"
+    SPEECH = "SPEECH"
+    VOTE = "VOTE"
+    VOTE_RESOLVE = "VOTE_RESOLVE"
+    GAME_OVER = "GAME_OVER"
 
-WOLF_ROLES = {
-    Role.WEREWOLF,
-    Role.WOLF_KING,
-    Role.WHITE_WOLF_KING,
-    Role.WOLF_BEAUTY,
-    Role.SNOW_WOLF,
-    Role.HIDDEN_WOLF,
-    Role.GARGOYLE
-}
+# 3. 玩家与房间 (Player & Room)
+class Player(BaseModel):
+    """Represents a player in the game."""
+    id: str
+    name: str
+    avatar_url: Optional[str] = None
+    is_alive: bool = True
+    role: Optional[Role] = None
+    is_host: bool = False
+    is_ready: bool = False
+    seat: Optional[int] = Field(default=None, ge=0, lt=12)
 
+class GameConfig(BaseModel):
+    """Defines the configuration for a game."""
+    template_name: str
+    is_private: bool = False
+    allow_spectators: bool = True
 
+class GameState(BaseModel):
+    """Represents the complete state of a single game room."""
+    room_id: str
+    players: List[Player] = []
+    stage: Stage = Stage.WAITING
+    timer: int = 0
+    day: int = 0
+    host_id: str
+    game_config: GameConfig
+    speech_order: List[str] = []
+    night_actions: Dict[str, Any] = {}
+    day_votes: Dict[str, str] = {}
+    witch_has_save: bool = True
+    witch_has_poison: bool = True
+    winner: Optional[Literal["GOOD", "WOLF"]] = None
+
+# 4. WebSocket 事件模型 (WebSocket Event Models)
+class ConnectedPayload(BaseModel):
+    player_id: str
+    room_id: str
+
+class StageChangePayload(BaseModel):
+    stage: Stage
+    timer: int
+    players: List[Player]
+
+class NightResultPayload(BaseModel):
+    dead: List[str]
+    saved: Optional[str] = None
+    poisoned: Optional[str] = None
+    checked: Optional[Dict[str, Role]] = None
+
+class VoteResultPayload(BaseModel):
+    eliminated: Optional[str]
+    votes: Dict[str, str]
+
+class GameOverPayload(BaseModel):
+    winner: Literal["GOOD", "WOLF"]
+    roles: Dict[str, Role]
+
+# 5. 板子定义 (Game Template)
 class GameTemplate(BaseModel):
     """Represents a game setup template (板子)."""
     name: str
@@ -41,134 +102,40 @@ class GameTemplate(BaseModel):
     roles: Dict[Role, int]
     description: str
 
-class GameConfig(BaseModel):
-    model_config = ConfigDict(extra='allow')
-    """Defines the configuration for a game."""
-    template_name: str
-
-# --- Player and Profile Models ---
-
-class ProfileStats(BaseModel):
-    games_played: int = 0
-    wins: int = 0
-    losses: int = 0
-    roles: Dict[str, int] = {
-        'werewolf': 0,
-        'god': 0,
-        'villager': 0
-    }
-
-class Profile(BaseModel):
-    id: str
-    name: str
-    avatar_url: Optional[str] = None
-    stats: ProfileStats
-
-class Player(BaseModel):
-    """Represents a player in the game."""
-    id: str # In-game temporary ID
-    profile_id: str # Persistent profile ID
-    name: str
-    avatar_url: Optional[str] = None
-    is_alive: bool = True
-    role: Optional[Role] = None
-
-    @field_serializer('role')
-    def serialize_role(self, role: Role, _info):
-        return role.value if role else None
-    is_sheriff: bool = False
-    seat: Optional[int] = Field(default=None, ge=0, lt=12)
-
-# --- Game State Model ---
-
-class Game(BaseModel):
-    """Represents the state of a single game room."""
-    room_id: str
-    players: List[Player] = []
-    host_id: str
-    game_config: Any
-    day: int = 0
-    phase: Literal[
-        "lobby", "guard_turn", "werewolf_turn", "seer_turn", "witch_turn",
-        "night_results",
-        "sheriff_election", "sheriff_speech", "sheriff_vote", "sheriff_result",
-        "day_discussion", "voting", "vote_result",
-        "ended"
-    ] = "lobby"
-    phase_end_time: Optional[float] = None
-    current_speaker_id: Optional[str] = None
-
-    # Sheriff election
-    sheriff_candidates: List[str] = []
-    sheriff_votes: Dict[str, str] = {}
-
-    # Night actions state
-    werewolf_kill_target: Optional[str] = None
-    werewolf_votes: Dict[str, str] = {}
-    guard_target: Optional[str] = None
-    last_guarded_id: Optional[str] = None # Stores the ID of the player guarded on the PREVIOUS night
-    witch_save_target: Optional[str] = None
-    witch_poison_target: Optional[str] = None
-    seer_check_result: Optional[Dict[str, str]] = None
-
-    # Witch potion status
-    witch_has_save: bool = True
-    witch_has_poison: bool = True
-    witch_used_potion_tonight: bool = False
-
-    # Day state
-    day_votes: Dict[str, str] = {}
-
-    # Results
-    nightly_deaths: List[str] = []
-
-# --- Pre-defined Game Templates ---
-
 GAME_TEMPLATES: List[GameTemplate] = [
     GameTemplate(
         name="6人暗牌局",
         player_counts=[6],
-        roles={
-            Role.WEREWOLF: 2,
-            Role.VILLAGER: 2,
-            Role.SEER: 1,
-            Role.GUARD: 1,
-        },
+        roles={Role.WEREWOLF: 2, Role.VILLAGER: 2, Role.SEER: 1, Role.GUARD: 1},
         description="2狼, 2民, 预言家, 守卫"
-    ),
-    GameTemplate(
-        name="新手9人局",
-        player_counts=[9],
-        roles={ Role.WEREWOLF: 3, Role.VILLAGER: 3, Role.SEER: 1, Role.WITCH: 1, Role.HUNTER: 1 },
-        description="3狼, 3民, 预言家, 女巫, 猎人"
     ),
     GameTemplate(
         name="预女猎白 标准板",
         player_counts=[12],
-        roles={ Role.WEREWOLF: 4, Role.VILLAGER: 4, Role.SEER: 1, Role.WITCH: 1, Role.HUNTER: 1, Role.IDIOT: 1 },
+        roles={Role.WEREWOLF: 4, Role.VILLAGER: 4, Role.SEER: 1, Role.WITCH: 1, Role.HUNTER: 1, Role.IDIOT: 1},
         description="4狼, 4民, 预女猎白"
     ),
     GameTemplate(
         name="狼王守卫",
         player_counts=[12],
-        roles={ Role.WEREWOLF: 3, Role.WOLF_KING: 1, Role.VILLAGER: 4, Role.SEER: 1, Role.WITCH: 1, Role.HUNTER: 1, Role.GUARD: 1 },
+        roles={Role.WEREWOLF: 3, Role.WOLF_KING: 1, Role.VILLAGER: 4, Role.SEER: 1, Role.WITCH: 1, Role.HUNTER: 1, Role.GUARD: 1},
         description="3狼, 狼王, 4民, 预女猎守"
     ),
-    GameTemplate(
-        name="白狼王骑士",
-        player_counts=[12],
-        roles={ Role.WEREWOLF: 3, Role.WHITE_WOLF_KING: 1, Role.VILLAGER: 4, Role.SEER: 1, Role.WITCH: 1, Role.KNIGHT: 1, Role.GUARD: 1 },
-        description="3狼, 白狼王, 4民, 预女骑守"
-    ),
-    GameTemplate(
-        name="6人明牌局",
-        player_counts=[6],
-        roles={
-            Role.WEREWOLF: 2,
-            Role.VILLAGER: 2,
-            Role.SEER: 1,
-            Role.HUNTER: 1,
-        },
-        description="2狼, 2民, 预言家, 猎人"
-    ),
 ]
+
+# 6. REST API Models
+class RoomCreateRequest(BaseModel):
+    host_name: str
+    config: GameConfig
+
+class RoomCreateResponse(BaseModel):
+    room_id: str
+    host_player_id: str
+    token: str
+
+class RoomJoinRequest(BaseModel):
+    player_name: str
+
+class RoomJoinResponse(BaseModel):
+    player_id: str
+    token: str

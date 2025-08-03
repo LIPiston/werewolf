@@ -1,84 +1,71 @@
-const API_BASE_URL = '/api';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:6501';
 
-// === Profile Management ===
+// --- Type Definitions ---
 
-export async function createProfile(name: string) {
-  const response = await fetch(`${API_BASE_URL}/profiles`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!response.ok) throw new Error("Failed to create profile");
-  return response.json();
+export interface GameTemplate {
+  name: string;
+  player_counts: number[];
+  roles: Record<string, number>;
+  description: string;
 }
 
-export async function getProfile(profileId: string) {
-  const response = await fetch(`${API_BASE_URL}/profiles/${profileId}`);
-  if (!response.ok) throw new Error("Failed to get profile");
-  return response.json();
+export interface GameConfig {
+  template_name: string;
+  is_private: boolean;
+  allow_spectators: boolean;
 }
 
-export async function uploadAvatar(profileId: string, formData: FormData) {
-  const response = await fetch(`${API_BASE_URL}/profiles/${profileId}/avatar`, {
-    method: "POST",
-    body: formData,
-  });
-  if (!response.ok) throw new Error("Failed to upload avatar");
-  return response.json();
+interface RoomCreateRequest {
+  host_name: string;
+  config: GameConfig;
 }
 
-export async function updateProfileName(profileId: string, name: string) {
-  const response = await fetch(`${API_BASE_URL}/profiles/${profileId}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!response.ok) throw new Error("Failed to update profile name");
-  return response.json();
+interface RoomCreateResponse {
+  room_id: string;
+  host_player_id: string;
+  token: string;
 }
 
-// === Game Management ===
-
-export async function getGameTemplates() {
-    const response = await fetch(`${API_BASE_URL}/game-templates`);
-    if (!response.ok) throw new Error("Failed to get game templates");
-    return response.json();
+interface RoomJoinResponse {
+  player_id: string;
+  token: string;
 }
 
-export async function createGame(templateName: string, hostProfileId: string) {
-  const gameConfig = { template_name: templateName };
-  const response = await fetch(`${API_BASE_URL}/games/create`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ host_profile_id: hostProfileId, game_config: gameConfig }),
-  });
+// --- API Functions ---
+
+export async function getGameTemplates(): Promise<GameTemplate[]> {
+  const response = await fetch(`${API_BASE_URL}/api/game-templates`);
   if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to create game");
+    throw new Error('Failed to fetch game templates');
   }
   return response.json();
 }
 
-export async function getGame(roomId: string) {
-    const response = await fetch(`${API_BASE_URL}/games/${roomId}`);
-    if (!response.ok) throw new Error("Failed to get game state");
-    return response.json();
-}
-
-export async function joinGame(roomId: string, profileId: string) {
-  const response = await fetch(`${API_BASE_URL}/games/${roomId}/join`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ profile_id: profileId }),
+export async function createRoom(hostName: string, config: GameConfig): Promise<RoomCreateResponse> {
+  const requestBody: RoomCreateRequest = { host_name: hostName, config };
+  const response = await fetch(`${API_BASE_URL}/api/room`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(requestBody),
   });
   if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to join game");
+    throw new Error('Failed to create room');
   }
   return response.json();
 }
-export async function getRooms() {
-  const response = await fetch(`${API_BASE_URL}/games`);
-  if (!response.ok) throw new Error("Failed to get rooms");
+
+export async function joinRoom(roomId: string, playerName: string): Promise<RoomJoinResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/room/${roomId}/join`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ player_name: playerName }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to join room');
+  }
   return response.json();
 }
